@@ -9,13 +9,15 @@
 
 #include "common/protocol.h"
 
-// 负责网络连接/收发的客户端类（与 UI 解耦，通过回调输出文本）
+/**
+ * 客户端网络类，管理与聊天服务器的连接和通信
+ */
 class ChatClientNetwork {
 public:
     using AppendFn = std::function<void(const std::wstring&)>;
 
     ChatClientNetwork() = default;
-    ~ChatClientNetwork() { disconnect(); }
+    ~ChatClientNetwork() { disconnect(); }// 确保析构时断开连接
 
     void setAppendCallback(AppendFn fn) { append_ = std::move(fn); }
 
@@ -30,10 +32,10 @@ private:
 
 private:
     SOCKET sock_ { INVALID_SOCKET };
-    std::thread recvThread_;
-    std::atomic<bool> connected_{false};
-    std::atomic<bool> disconnecting_{false};
-    std::string nicknameUtf8_;
-    AppendFn append_;
+    std::thread recvThread_; // 接收消息线程
+    std::atomic<bool> connected_{false}; // 连接状态
+    std::atomic<bool> disconnecting_{false}; // 正在断开连接
+    std::string nicknameUtf8_; // 用户昵称（UTF-8 编码）
+    AppendFn append_; // 用于显示消息的回调函数
 };
 

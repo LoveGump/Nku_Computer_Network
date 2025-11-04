@@ -33,10 +33,10 @@ private:
 
 private:
     SOCKET listenSock_ { INVALID_SOCKET }; // 监听套接字
-    std::thread acceptThread_; // 接受线程
-    std::vector<ClientSession*> clients_; // 活动客户端会话列表
-    std::mutex clientsMtx_; // 保护客户端列表的互斥锁
-    std::atomic<bool> running_{false}; // 服务器运行状态
+    std::thread acceptThread_; // 服务器接受线程
+    std::vector<ClientSession*> clients_; // 活动客户端列表
+    std::mutex clientsMtx_;     // 保护客户端列表的互斥锁
+    std::atomic<bool> running_{false};  // 服务器运行状态
 };
 
 /**
@@ -56,8 +56,8 @@ private:
     void run();
 
 private:
-    ChatServer* server_{};
-    SOCKET sock_{ INVALID_SOCKET };
-    std::thread thread_;
-    std::string nickname_;
+    ChatServer* server_{}; // 所属服务器指针
+    SOCKET sock_{ INVALID_SOCKET }; // 客户端套接字
+    std::thread thread_; // 处理线程
+    std::string nickname_;// 客户端昵称
 };

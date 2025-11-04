@@ -1,6 +1,7 @@
 #include "chat_server.h"
 #include <algorithm>
 #include <iostream>
+#include <vector>
 
 using namespace chatproto;
 
@@ -10,22 +11,28 @@ using namespace chatproto;
  */
 bool ChatServer::start(uint16_t port) {
     if (running_.load()) return true; // 如果已经运行则直接返回 true
-
+    // 创建监听套接字
     SOCKET& listenSockRef = listenSock_;
+    // af: IPv4,type:SOCK_STREAM, protocol:TCP 流式套接字
     listenSockRef = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listenSockRef == INVALID_SOCKET) return false;
 
+    // 允许地址重用
     u_long yes = 1;
+    // 设置套接字选项 允许地址重用
     setsockopt(listenSockRef, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
+    // 绑定地址和端口
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY); // 绑定到所有接口
     addr.sin_port = htons(port);
 
+    // 将套接字绑定到指定的 IP 地址和端口
     if (bind(listenSockRef, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         closesocket(listenSockRef); listenSockRef = INVALID_SOCKET; return false;
     }
+    // 开始监听传入连接
     if (listen(listenSockRef, SOMAXCONN) == SOCKET_ERROR) {
         closesocket(listenSockRef); listenSockRef = INVALID_SOCKET; return false;
     }
@@ -35,22 +42,40 @@ bool ChatServer::start(uint16_t port) {
     return true;
 }
 
+/**
+ * 停止服务器，关闭所有连接
+ */
 void ChatServer::stop() {
-    if (!running_.load()) return;
+    if (!running_.load()) return; // 如果未运行则直接返回
+
+    // 停止接受新连接
     running_.store(false);
     if (listenSock_ != INVALID_SOCKET) {
-        closesocket(listenSock_);
+        closesocket(listenSock_);// 关闭监听套接字
         listenSock_ = INVALID_SOCKET;
     }
+    std::cout<<"acceptThread_ stoping"<<std::endl;
+    // 等待接受线程结束
     if (acceptThread_.joinable()) acceptThread_.join();
+    std::cout<<"acceptThread_ stopped"<<std::endl;
 
-    // close all clients
-    std::lock_guard<std::mutex> lock(clientsMtx_);
-    for (auto* c : clients_) {
-        closesocket(c->sock());
-        delete c;
+    // 关闭所有客户端连接（避免在持锁时 delete 导致死锁）
+    std::vector<ClientSession*> toClose;
+    {
+        std::lock_guard<std::mutex> lock(clientsMtx_);
+        toClose.swap(clients_); // 将当前列表转移出来并清空服务器持有的列表
     }
-    clients_.clear();
+
+    // 先通过 shutdown 唤醒阻塞的 recv，从而让线程优雅退出
+    for (auto* c : toClose) {
+        shutdown(c->sock(), SD_BOTH);
+    }
+
+    // 等待线程退出并释放资源（在无锁状态下进行，避免死锁）
+    for (auto* c : toClose) {
+        delete c; // 析构中 join 线程
+    }
+    std::cout<<"closesocketall"<<std::endl;
 }
 
 /**
@@ -60,78 +85,109 @@ void ChatServer::stop() {
  * @param exclude 排除的客户端指针（可选）
  */
 void ChatServer::broadcast(MsgType type, const std::string& payload, ClientSession* exclude) {
-    std::lock_guard<std::mutex> lock(clientsMtx_);
-    for (auto it = clients_.begin(); it != clients_.end();) {
-        ClientSession* c = *it;
-        if (exclude && c == exclude) { ++it; continue; }
-        if (!sendFrame(c->sock(), type, payload)) {
-            closesocket(c->sock());
-            it = clients_.erase(it);
-            delete c;
-        } else {
-            ++it;
+    // 上锁保护客户端列表，并在锁外删除对象避免死锁
+    std::vector<ClientSession*> toRemove;
+    {
+        std::lock_guard<std::mutex> lock(clientsMtx_);
+        for (auto it = clients_.begin(); it != clients_.end();) {
+            ClientSession* c = *it;
+            if (exclude && c == exclude) { ++it; continue; }
+            if (!sendFrame(c->sock(), type, payload)) {
+                // 从列表中移除，稍后在锁外关闭并析构
+                it = clients_.erase(it);
+                toRemove.push_back(c);
+            } else {
+                ++it;
+            }
         }
+    }
+    // 在锁外进行 shutdown + delete，避免析构中 join() 与持锁引发的死锁
+    for (auto* c : toRemove) {
+        ::shutdown(c->sock(), SD_BOTH);
+    }
+    for (auto* c : toRemove) {
+        delete c;
     }
 }
 
-
+/**
+ * 移除指定的客户端会话
+ * @param c 要移除的客户端会话指针
+ */
 void ChatServer::removeClient(ClientSession* c) {
+    // 上锁
     std::lock_guard<std::mutex> lock(clientsMtx_);
+    // 查找并移除客户端
     auto it = std::find(clients_.begin(), clients_.end(), c);
     if (it != clients_.end()) clients_.erase(it);
 }
 
+/**
+ * 持续监听客户端连接请求，接受新连接
+ */
 void ChatServer::acceptLoop() {
     while (running_.load()) {
-        sockaddr_in caddr{}; int clen = sizeof(caddr);
+        // 开启新连接
+        sockaddr_in caddr{}; 
+        int clen = sizeof(caddr);
         SOCKET cs = accept(listenSock_, (sockaddr*)&caddr, &clen);
         if (cs == INVALID_SOCKET) {
+            // 如果重连接失败且服务器正在运行，则继续循环
             if (!running_.load()) break;
             continue;
         }
-        auto* cli = new ClientSession(this, cs);
+        auto* cli = new ClientSession(this, cs);// 创建新的客户端会话
         {
+            // 上锁
             std::lock_guard<std::mutex> lock(clientsMtx_);
             clients_.push_back(cli);
         }
-        cli->start();
+        cli->start();// 启动客户端会话线程
     }
 }
 
 ClientSession::~ClientSession() {
+    // 等待处理线程结束
     if (thread_.joinable()) thread_.join();
 }
 
 void ClientSession::start() {
+    // 启动处理线程
     thread_ = std::thread(&ClientSession::run, this);
 }
 
 void ClientSession::run() {
-    // Expect HELLO
+    // 首先接收 HELLO 消息并获取昵称
     MsgType t; std::string p;
     if (!recvFrame(sock_, t, p) || t != MsgType::HELLO) {
+        // 接收失败或消息类型不对则关闭连接
         closesocket(sock_); return;
     }
     nickname_ = p;
 
-    // announce join
+    // 通知所有客户端有新用户加入
     server_->broadcast(MsgType::USER_JOIN, nickname_, nullptr);
 
+    // 持续接收客户端消息
     while (true) {
         MsgType type; std::string payload;
-        if (!recvFrame(sock_, type, payload)) break;
+        if (!recvFrame(sock_, type, payload)) break; // 接收失败则退出循环
         if (type == MsgType::CHAT) {
+            // 广播聊天消息，格式为 "昵称\n消息内容"
             std::string combined = nickname_;
             combined.push_back('\n');
             combined += payload;
             server_->broadcast(MsgType::SERVER_BROADCAST, combined, nullptr);
         } else if (type == MsgType::BYE) {
+            // 客户端打算断开连接，更新昵称（如果有提供）
             if (!payload.empty()) nickname_ = payload;
             break;
         }
     }
 
+    // 通知所有客户端有用户离开
     server_->broadcast(MsgType::USER_LEAVE, nickname_, this);
+    // 从服务器移除客户端并关闭连接
     server_->removeClient(this);
-    closesocket(sock_);
+    closesocket(sock_); //关闭客户端的通信套接字，释放资源
 }
