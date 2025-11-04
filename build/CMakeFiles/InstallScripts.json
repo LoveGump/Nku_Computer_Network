@@ -1,9 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"F:/code/Computer_Network/lab1/build/cmake_install.cmake",
-		"F:/code/Computer_Network/lab1/build/server/cmake_install.cmake",
-		"F:/code/Computer_Network/lab1/build/client/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
