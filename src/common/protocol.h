@@ -4,21 +4,12 @@
 // 帧格式: [1字节类型][4字节负载长度大端][负载字节]
 // 所有负载中的字符串均为 UTF-8。
 
-
-#ifdef _WIN32
+#ifndef NOMINMAX
 #  define NOMINMAX
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-#else
-#  include <arpa/inet.h>
-#  include <sys/socket.h>
-#  include <netdb.h>
-#  include <unistd.h>
-#  define SOCKET int
-#  define INVALID_SOCKET (-1)
-#  define SOCKET_ERROR (-1)
-#  define closesocket close
 #endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 
 #include <cstdint>
 #include <string>
@@ -90,9 +81,6 @@ inline bool recvFrame(SOCKET s, MsgType& typeOut, std::string& payloadOut) {
     payloadOut.resize(len);
     return recvAll(s, payloadOut.data(), static_cast<int>(len));
 }
-
-#ifdef _WIN32
-#include <windows.h>
 inline std::string utf16_to_utf8(const std::wstring& w) {
     if (w.empty()) return std::string();
     int size = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -108,10 +96,5 @@ inline std::wstring utf8_to_utf16(const std::string& s) {
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), out.data(), size);
     return out;
 }
-#else
-// On non-Windows, assume UTF-8 locale and passthrough helpers (not used here)
-inline std::string utf16_to_utf8(const std::wstring& w) { return std::string(); }
-inline std::wstring utf8_to_utf16(const std::string& s) { return std::wstring(); }
-#endif
 
 } // namespace chatproto

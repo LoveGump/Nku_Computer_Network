@@ -43,26 +43,20 @@
    └─ main.cpp               # Win32 GUI 客户端
 ```
 
-## 构建
+## 构建（仅 Windows + MSVC）
 
 前置：
 - Windows 10/11
 - CMake 3.20+
-- MSVC (Visual Studio Build Tools) 或 MinGW-w64（建议 MSVC）
+- Microsoft Visual C++ (VS 2019/2022)
 
-示例（PowerShell，MSVC）：
+示例（PowerShell）：
 ```powershell
-# 在项目根目录执行
-cmake -S . -B build -G "Ninja"
+# 在项目根目录执行（VS 2022，x64）
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 构建产物位于 `build/bin/`：`chat_server(.exe)` 与 `chat_client(.exe)`。
-
-> 如使用 Visual Studio IDE，可直接生成 VS 解决方案：
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022"
-cmake --build build --config Debug
-```
 
 ## 运行
 

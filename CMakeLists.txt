@@ -3,17 +3,12 @@ project(ChatApp LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_EXTENSIONS OFF) # 禁用编译器扩展
 
-# 使用Unicode on Windows
-if(WIN32)
-  add_definitions(-DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN)
-endif()
-
-# 强制MSVC将源文件视为UTF-8，以避免C4819警告
-if(MSVC)
-  add_compile_options(/utf-8)
-endif()
+# 全局定义与编译选项
+add_definitions(-DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX)
+# MSVC UTF-8 源码
+add_compile_options(/utf-8)
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
