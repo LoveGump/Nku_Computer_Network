@@ -1,0 +1,10 @@
+^F:\CODE\COMPUTER_NETWORK\LAB1\BUILD\CMAKEFILES\495933C0813CD9C97E8806158113D533\GENERATE.STAMP.RULE
+setlocal
+F:\Apps\cmake\bin\cmake.exe -SF:/code/Computer_Network/lab1 -BF:/code/Computer_Network/lab1/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file F:/code/Computer_Network/lab1/build/ChatApp.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

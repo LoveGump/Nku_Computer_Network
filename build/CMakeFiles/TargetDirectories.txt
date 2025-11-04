@@ -1,0 +1,4 @@
+F:/code/Computer_Network/lab1/build/CMakeFiles/ALL_BUILD.dir
+F:/code/Computer_Network/lab1/build/CMakeFiles/ZERO_CHECK.dir
+F:/code/Computer_Network/lab1/build/server/CMakeFiles/chat_server.dir
+F:/code/Computer_Network/lab1/build/client/CMakeFiles/chat_client.dir
