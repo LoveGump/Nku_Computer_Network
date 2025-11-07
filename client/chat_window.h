@@ -18,6 +18,7 @@ private:
     void appendText(const std::wstring& text);
     void onSend();
     void onConnectToggle();
+    void updateUiForConnected(bool connected);
 
 private:
     // 控件句柄
@@ -51,3 +52,5 @@ private:
 
 // 消息：追加聊天内容
 #define WM_CHAT_APPEND (WM_APP + 1)
+// 消息：连接状态变化（wParam: 1=连接，0=断开）
+#define WM_CONN_STATE  (WM_APP + 2)

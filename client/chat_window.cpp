@@ -112,6 +112,10 @@ LRESULT ChatWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // 消息类型为 WM_CHAT_APPEND，参数为动态分配的字符串指针
             PostMessageW(hwnd_, WM_CHAT_APPEND, 0, (LPARAM)p);
         });
+        // 连接状态变化回调
+        client_.setStateCallback([this](bool connected){
+            PostMessageW(hwnd_, WM_CONN_STATE, (WPARAM)(connected ? 1 : 0), 0);
+        });
         break;
     }
     case WM_SIZE: {
@@ -156,6 +160,11 @@ LRESULT ChatWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             appendText(*p);
             delete p;
         }
+        return 0;
+    }
+    case WM_CONN_STATE: {
+        bool connected = (wParam != 0);
+        updateUiForConnected(connected);
         return 0;
     }
     }
@@ -238,11 +247,23 @@ void ChatWindow::onConnectToggle() {
         GetWindowTextW(hNick_, nickW, 64);
         if (client_.connectTo(addrW, portW, nickW)) {
             // 连接成功，更新按钮文本
-            SetWindowTextW(hConnect_, L"断开");
+            updateUiForConnected(true);
         }
     } else {
         // 断开连接，更新按钮文本
         client_.disconnect();
-        SetWindowTextW(hConnect_, L"连接");
+        updateUiForConnected(false);
     }
+}
+
+void ChatWindow::updateUiForConnected(bool connected) {
+    // 切换按钮文本
+    SetWindowTextW(hConnect_, connected ? L"断开" : L"连接");
+    // 连接参数在连接后禁用，断开后启用
+    EnableWindow(hAddr_, !connected);
+    EnableWindow(hPort_, !connected);
+    EnableWindow(hNick_, !connected);
+    // 发送与输入框仅在连接后启用
+    EnableWindow(hSend_, connected);
+    EnableWindow(hInput_, connected);
 }

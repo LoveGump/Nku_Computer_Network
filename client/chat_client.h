@@ -15,11 +15,13 @@
 class ChatClientNetwork {
 public:
     using AppendFn = std::function<void(const std::wstring&)>;
+    using StateFn  = std::function<void(bool connected)>;
 
     ChatClientNetwork() = default;
     ~ChatClientNetwork() { disconnect(); }// 确保析构时断开连接
 
     void setAppendCallback(AppendFn fn) { append_ = std::move(fn); }
+    void setStateCallback(StateFn fn) { state_ = std::move(fn); }
 
     bool connectTo(const std::wstring& addrW, const std::wstring& portW, const std::wstring& nickW);
     void disconnect();
@@ -29,6 +31,7 @@ public:
 private:
     void receiverLoop();
     void append(const std::wstring& w);
+    void notifyState(bool connected) { if (state_) state_(connected); }
 
 private:
     SOCKET sock_ { INVALID_SOCKET };
@@ -37,5 +40,6 @@ private:
     std::atomic<bool> disconnecting_{false}; // 正在断开连接
     std::string nicknameUtf8_; // 用户昵称（UTF-8 编码）
     AppendFn append_; // 用于显示消息的回调函数
+    StateFn state_;   // 连接状态变化回调
 };
 

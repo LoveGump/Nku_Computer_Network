@@ -11,6 +11,17 @@ using namespace chatproto;
 bool ChatClientNetwork::connectTo(const std::wstring& addrW, const std::wstring& portW, const std::wstring& nickW) {
     if (connected_.load()) return true; // 已连接则直接返回 true
 
+    // 若上一次是被动断开，接收线程可能已退出但仍处于 joinable 状态；先回收
+    if (recvThread_.joinable()) {
+        recvThread_.join();
+    }
+    // 清理残留的旧 socket（若有）
+    if (sock_ != INVALID_SOCKET) {
+        shutdown(sock_, SD_BOTH);
+        closesocket(sock_);
+        sock_ = INVALID_SOCKET;
+    }
+
     std::wstring waddr = addrW.empty() ? L"127.0.0.1" : addrW;
     std::wstring wport = portW.empty() ? L"5000" : portW;
     std::wstring wnick = nickW.empty() ? L"User" : nickW;
@@ -55,6 +66,7 @@ bool ChatClientNetwork::connectTo(const std::wstring& addrW, const std::wstring&
 
     // 发送 HELLO 消息
     if (!sendFrame(s, MsgType::HELLO, nicknameUtf8_)) {
+        // 如果发送失败，关闭套接字并返回
         closesocket(s);
         append(L"[错误] 发送 HELLO 失败\r\n");
         return false;
@@ -64,7 +76,8 @@ bool ChatClientNetwork::connectTo(const std::wstring& addrW, const std::wstring&
     sock_ = s;
     connected_.store(true);
     disconnecting_.store(false);
-    append(L"[系统] 已连接\r\n");
+    append(L"[系统] 已连接\r\n"); // 提示已连接
+    notifyState(true); // 状态通知
     recvThread_ = std::thread(&ChatClientNetwork::receiverLoop, this);
     return true;
 }
@@ -73,18 +86,25 @@ bool ChatClientNetwork::connectTo(const std::wstring& addrW, const std::wstring&
  * 断开与服务器的连接
  */
 void ChatClientNetwork::disconnect() {
-    if (!connected_.load()) return;
+    // 幂等断开：即便已被动断开也需要 join 线程，避免析构时 terminate。
     disconnecting_.store(true);
-    // 发送 BYE
-    sendFrame(sock_, MsgType::BYE, nicknameUtf8_);
 
-    // 清理资源
-    connected_.store(false);
-    shutdown(sock_, SD_BOTH);
-    closesocket(sock_);
-    if (recvThread_.joinable()) recvThread_.join();
-    sock_ = INVALID_SOCKET;
+    bool wasConnected = connected_.exchange(false); // 获取并清除连接状态
+    if (wasConnected && sock_ != INVALID_SOCKET) {
+        // 仍处于连接：尝试发送 BYE（忽略失败）再关闭
+        sendFrame(sock_, MsgType::BYE, nicknameUtf8_);
+        shutdown(sock_, SD_BOTH);
+        closesocket(sock_);
+        sock_ = INVALID_SOCKET;
+    }
+
+    // 被动断开后线程可能已退出但未 join
+    if (recvThread_.joinable()) {
+        recvThread_.join();
+    }
+
     disconnecting_.store(false);
+    notifyState(false); // 状态通知幂等
 }
 
 /**
@@ -98,33 +118,46 @@ bool ChatClientNetwork::sendText(const std::wstring& textW) {
 }
 
 /**
- * 接收消息循环
+ *  接收消息线程，循环接收新的消息
  */
 void ChatClientNetwork::receiverLoop() {
     while (true) {
-        MsgType t; std::string p;
+        MsgType t; 
+        std::string p;
+        // 接收消息失败则退出循环，一般是连接断开
         if (!recvFrame(sock_, t, p)) break;
-        if (t == MsgType::USER_JOIN) {
+        switch (t) {
+        case MsgType::USER_JOIN: {
             std::wstring msg = L"[加入] ";
             msg += utf8_to_utf16(p);
             msg += L"\r\n";
             append(msg);
-        } else if (t == MsgType::USER_LEAVE) {
+            break;
+        }
+        case MsgType::USER_LEAVE: {
             std::wstring msg = L"[离开] ";
             msg += utf8_to_utf16(p);
             msg += L"\r\n";
             append(msg);
-        } else if (t == MsgType::SERVER_BROADCAST) {
+            break;
+        }
+        case MsgType::SERVER_BROADCAST: {
             size_t pos = p.find('\n');
             std::string from = pos == std::string::npos ? std::string() : p.substr(0, pos);
             std::string text = pos == std::string::npos ? p : p.substr(pos + 1);
             std::wstring line = L"<" + utf8_to_utf16(from) + L"> " + utf8_to_utf16(text) + L"\r\n";
             append(line);
+            break;
+        }
+        default:
+            break;
         }
     }
     
-    // 断开连接
+    // 断开连接：若是被动断开，更新连接状态并提示
     if (!disconnecting_.load()) {
+        connected_.store(false);
+        notifyState(false);
         append(L"[系统] 已断开连接\r\n");
     }
 }
