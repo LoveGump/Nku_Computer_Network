@@ -12,5 +12,6 @@ add_compile_options(/utf-8)
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
+# 添加子目录
 add_subdirectory(server)
 add_subdirectory(client)
