@@ -60,9 +60,8 @@ void ChatServer::stop() {
         closesocket(listenSock_);  // 关闭监听套接字
         listenSock_ = INVALID_SOCKET;
     }
-    // 等待接受线程结束
-    if (acceptThread_.joinable()) acceptThread_.join();
-    std::cout << "acceptThread_ stopped" << std::endl;
+
+    if (acceptThread_.joinable()) acceptThread_.join();  // 等待接受线程结束
 
     // 关闭所有客户端连接（避免在持锁时 delete 导致死锁）
     std::vector<ClientSession*> toClose;
@@ -70,18 +69,12 @@ void ChatServer::stop() {
         std::lock_guard<std::mutex> lock(clientsMtx_);
         toClose.swap(clients_);  // 将当前列表转移出来并清空服务器持有的列表
     }
-    std::cout << "shutdown" << std::endl;
-    // 通过强制关闭唤醒阻塞的 recv，从而让线程退出
     for (auto* c : toClose) {
         c->forceClose();
     }
-    std::cout << "delete" << std::endl;
-    // 等待线程退出并释放资源（在无锁状态下进行，避免死锁）
-    // 这里必须要等客户端退出才能结束
     for (auto* c : toClose) {
         delete c;  // 析构中 join 线程
     }
-    std::cout << "closesocketall" << std::endl;
 }
 
 /**

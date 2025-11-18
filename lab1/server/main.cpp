@@ -43,7 +43,6 @@ int main(int argc, char **argv) {
             if (line == "quit") break;
         }
         server.stop();
-        std::cout << "serverstop()" << std::endl;
     });
 
     if (quitThread.joinable()) quitThread.join();
