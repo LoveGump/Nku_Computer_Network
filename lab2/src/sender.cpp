@@ -1,529 +1,562 @@
-﻿#include "sender.h"
+#include "sender.h"
 
 #include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 
-namespace rtp
-{
-    namespace
-    {
-        constexpr std::size_t SACK_BITS = 32;
-        constexpr int MAX_HANDSHAKE_RETRIES = 5;
-        constexpr int MAX_FIN_RETRIES = 5;
-        constexpr int MAX_SACK_RETX_PER_ACK = 4;
-        constexpr int MIN_GAP_RETX_INTERVAL_MS = DATA_TIMEOUT_MS / 2;
+namespace rtp {
+	using std::cerr;
+	using std::cout;
+	using std::ifstream;
+	using std::size_t;
+	using std::string;
+	using std::vector;
 
-        bool same_endpoint(const sockaddr_in &a, const sockaddr_in &b)
-        {
-            return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
-        }
-    } // namespace
+	namespace {
+		// SACK位图宽度（支持标记32个段）
+		constexpr size_t SACK_BITS = 32;
+		// 最大握手重试次数
+		constexpr int MAX_HANDSHAKE_RETRIES = 5;
+		// 最大FIN重试次数
+		constexpr int MAX_FIN_RETRIES = 5;
+		// 单次ACK最多重传的SACK缺口段数
+		constexpr int MAX_SACK_RETX_PER_ACK = 4;
+		// SACK缺口重传最小间隔（避免频繁重传）
+		constexpr int MIN_GAP_RETX_INTERVAL_MS = DATA_TIMEOUT_MS / 2;
+		// 单个数据段最大重传次数（超过则认为连接断开）
+		constexpr int MAX_RETRANSMITS = 15;
+		// 全局无响应超时（30秒）
+		constexpr int GLOBAL_TIMEOUT_MS = 30000;
 
-    ReliableSender::ReliableSender(std::string dest_ip, uint16_t dest_port, std::string file_path, uint16_t window_size, uint16_t local_port)
-        : dest_ip_(std::move(dest_ip)),
-          dest_port_(dest_port),
-          local_port_(local_port),
-          file_path_(std::move(file_path)),
-          window_size_(std::min<uint16_t>(window_size, static_cast<uint16_t>(SACK_BITS)))
-    {
-        remote_.sin_family = AF_INET;
-        remote_.sin_port = htons(dest_port_);
-    }
+		// 检查两个地址是否相同
+		bool same_endpoint(const sockaddr_in& a, const sockaddr_in& b) {
+			return a.sin_addr.s_addr == b.sin_addr.s_addr &&
+				   a.sin_port == b.sin_port;
+		}
+	}  // namespace
 
-    ReliableSender::~ReliableSender()
-    {
-        if (socket_valid(sock_))
-        {
-            close_socket(sock_);
-        }
-    }
+	ReliableSender::ReliableSender(string dest_ip, uint16_t dest_port,
+								   string file_path, uint16_t window_size,
+								   uint16_t local_port)
+		: dest_ip_(std::move(dest_ip)),
+		  dest_port_(dest_port),
+		  local_port_(local_port),
+		  file_path_(std::move(file_path)),
+		  window_size_(std::min<uint16_t>(window_size,
+										  static_cast<uint16_t>(SACK_BITS))),
+		  peer_wnd_(0),
+		  isn_(0),
+		  peer_isn_(0) {
+		remote_.sin_family = AF_INET;
+		remote_.sin_port = htons(dest_port_);
+	}
 
-    bool ReliableSender::wait_for_packet(Packet &pkt, sockaddr_in &from, int timeout_ms)
-    {
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(sock_, &rfds);
-        timeval tv{};
-        if (timeout_ms >= 0)
-        {
-            tv.tv_sec = timeout_ms / 1000;
-            tv.tv_usec = (timeout_ms % 1000) * 1000;
-        }
-        int nfds = 0;
-        int rv = select(nfds, &rfds, nullptr, nullptr, timeout_ms >= 0 ? &tv : nullptr);
-        if (rv <= 0)
-        {
-            return false;
-        }
-        sockaddr_in peer{};
-        socklen_t len = sizeof(peer);
-        std::vector<uint8_t> buf(2048);
-        int n = recvfrom(sock_, reinterpret_cast<char *>(buf.data()), static_cast<int>(buf.size()), 0,
-                         reinterpret_cast<sockaddr *>(&peer), &len);
-        if (n <= 0)
-        {
-            return false;
-        }
-        if (!parse_packet(buf.data(), static_cast<std::size_t>(n), pkt))
-        {
-            return false;
-        }
-        from = peer;
-        return true;
-    }
+	ReliableSender::~ReliableSender() {
+		if (socket_valid(sock_)) {
+			close_socket(sock_);
+		}
+	}
 
-    int ReliableSender::send_raw(const PacketHeader &hdr, const std::vector<uint8_t> &payload)
-    {
-        auto buffer = serialize_packet(hdr, payload);
-        return sendto(sock_, reinterpret_cast<const char *>(buffer.data()), static_cast<int>(buffer.size()), 0,
-                      reinterpret_cast<const sockaddr *>(&remote_), sizeof(remote_));
-    }
+	bool ReliableSender::wait_for_packet(Packet& pkt, sockaddr_in& from,
+										 int timeout_ms) {
+		fd_set rfds;
+		FD_ZERO(&rfds);
+		FD_SET(sock_, &rfds);
+		timeval tv{};
+		if (timeout_ms >= 0) {
+			tv.tv_sec = timeout_ms / 1000;
+			tv.tv_usec = (timeout_ms % 1000) * 1000;
+		}
+		int nfds = 0;
+		int rv = select(nfds, &rfds, nullptr, nullptr,
+						timeout_ms >= 0 ? &tv : nullptr);
+		if (rv <= 0) {
+			return false;
+		}
+		sockaddr_in peer{};
+		socklen_t len = sizeof(peer);
+		vector<uint8_t> buf(2048);
+		int n = recvfrom(sock_, reinterpret_cast<char*>(buf.data()),
+						 static_cast<int>(buf.size()), 0,
+						 reinterpret_cast<sockaddr*>(&peer), &len);
+		if (n <= 0) {
+			return false;
+		}
+		if (!parse_packet(buf.data(), static_cast<size_t>(n), pkt)) {
+			return false;
+		}
+		from = peer;
+		return true;
+	}
 
-    bool ReliableSender::handshake()
-    {
-        PacketHeader syn{};
-        syn.seq = 0;
-        syn.ack = 0;
-        syn.wnd = window_size_;
-        syn.len = 0;
-        syn.flags = FLAG_SYN;
-        syn.sack_mask = 0;
+	int ReliableSender::send_raw(const PacketHeader& hdr,
+								 const vector<uint8_t>& payload) {
+		auto buffer = serialize_packet(hdr, payload);
+		return sendto(sock_, reinterpret_cast<const char*>(buffer.data()),
+					  static_cast<int>(buffer.size()), 0,
+					  reinterpret_cast<const sockaddr*>(&remote_),
+					  sizeof(remote_));
+	}
 
-        uint16_t peer_wnd = window_size_;
-        std::cout << "[DEBUG] Starting handshake with " << dest_ip_ << ":" << dest_port_ << "\n";
-        for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES; ++attempt)
-        {
-            std::cout << "[DEBUG] Sending SYN (attempt " << (attempt + 1) << "/" << MAX_HANDSHAKE_RETRIES << ")\n";
-            send_raw(syn, {});
-            Packet pkt{};
-            sockaddr_in from{};
-            if (!wait_for_packet(pkt, from, HANDSHAKE_TIMEOUT_MS))
-            {
-                continue;
-            }
-            if (!same_endpoint(from, remote_))
-            {
-                std::cout << "[DEBUG] Ignoring handshake response from unexpected peer\n";
-                continue;
-            }
-            if ((pkt.header.flags & FLAG_SYN) && (pkt.header.flags & FLAG_ACK) && pkt.header.ack == syn.seq + 1)
-            {
-                peer_wnd = std::min<uint16_t>(pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
-                std::cout << "[DEBUG] Received SYN+ACK, peer window size: " << peer_wnd << "\n";
-                PacketHeader ack{};
-                ack.seq = 1;
-                ack.ack = pkt.header.seq + 1;
-                ack.flags = FLAG_ACK;
-                ack.wnd = window_size_;
-                ack.len = 0;
-                ack.sack_mask = 0;
-                send_raw(ack, {});
-                state_.peer_wnd = peer_wnd;
-                std::cout << "[DEBUG] Handshake completed successfully\n";
-                return true;
-            }
-        }
-        std::cerr << "[WARN] Handshake failed after retries\n";
-        return false;
-    }
+	/**
+	 * 发送RST段，强制终止连接
+	 * 用于握手失败、校验错误、状态异常等场景
+	 */
+	void ReliableSender::send_rst() {
+		PacketHeader rst{};
+		rst.seq = isn_ + 1;
+		rst.ack = peer_isn_ + 1;
+		rst.flags = FLAG_RST;
+		rst.wnd = 0;
+		rst.len = 0;
+		rst.sack_mask = 0;
+		send_raw(rst, {});
+		cout << "[RST] Sent RST segment to reset connection\n";
+	}
 
-    void ReliableSender::retransmit(uint32_t seq, SegmentInfo &seg)
-    {
-        bool is_retransmit = seg.sent; // 濡傛灉宸茬粡鍙戦€佽繃锛岃繖鏄噸浼?
-        PacketHeader hdr{};
-        hdr.seq = seq;
-        hdr.ack = 0;
-        hdr.flags = FLAG_DATA;
-        hdr.wnd = window_size_;
-        hdr.len = static_cast<uint16_t>(seg.data.size());
-        hdr.sack_mask = 0;
-        if (start_time_ == 0)
-        {
-            start_time_ = now_ms();
-        }
-        send_raw(hdr, seg.data);
-        seg.sent = true;
-        seg.last_send = now_ms();
+	/**
+	 * 执行三次握手建立连接
+	 * 流程：SYN -> SYN+ACK -> ACK
+	 * 返回true表示握手成功
+	 */
+	bool ReliableSender::handshake() {
+		PacketHeader syn{};
+		syn.seq = isn_;
+		syn.ack = 0;
+		syn.wnd = window_size_;
+		syn.len = 0;
+		syn.flags = FLAG_SYN;
+		syn.sack_mask = 0;
 
-        if (is_retransmit)
-        {
-            retransmit_count_++;
-        }
-    }
+		cout << "[DEBUG] Starting handshake with " << dest_ip_ << ":"
+			 << dest_port_ << "\n";
+		for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES; ++attempt) {
+			cout << "[DEBUG] Sending SYN (attempt " << (attempt + 1) << "/"
+				 << MAX_HANDSHAKE_RETRIES << ")\n";
+			send_raw(syn, {});
+			Packet pkt{};
+			sockaddr_in from{};
+			if (!wait_for_packet(pkt, from, HANDSHAKE_TIMEOUT_MS)) {
+				continue;
+			}
+			if (!same_endpoint(from, remote_)) {
+				cout << "[DEBUG] Ignoring handshake response from unexpected "
+						"peer\n";
+				continue;
+			}
+			// 收到RST段，连接被对方重置
+			if (pkt.header.flags & FLAG_RST) {
+				cerr << "[RST] Received RST during handshake, connection reset "
+						"by peer\n";
+				return false;
+			}
+			if ((pkt.header.flags & FLAG_SYN) &&
+				(pkt.header.flags & FLAG_ACK) &&
+				pkt.header.ack == syn.seq + 1) {
+				peer_isn_ = pkt.header.seq;
+				peer_wnd_ = std::min<uint16_t>(
+					pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
+				cout << "[DEBUG] Received SYN+ACK, peer window size: "
+					 << peer_wnd_ << "\n";
+				PacketHeader ack{};
+				ack.seq = isn_ + 1;
+				ack.ack = peer_isn_ + 1;
+				ack.flags = FLAG_ACK;
+				ack.wnd = window_size_;
+				ack.len = 0;
+				ack.sack_mask = 0;
+				send_raw(ack, {});
+				cout << "[DEBUG] Handshake completed successfully\n";
+				return true;
+			}
+		}
+		cerr << "[WARN] Handshake failed after retries\n";
+		send_rst();	 // 握手失败，发送RST终止连接
+		return false;
+	}
 
-    std::size_t ReliableSender::inflight_count() const
-    {
-        std::size_t count = 0;
-        for (const auto &s : segments_)
-        {
-            if (s.sent && !s.acked)
-            {
-                ++count;
-            }
-        }
-        return count;
-    }
+	/**
+	 * 发送或重传指定序号的数据段
+	 * seq: 段序号（相对序号，从1开始）
+	 * 如果是重传，会记录统计信息
+	 */
+	void ReliableSender::transmit_segment(uint32_t seq) {
+		auto& seg = window_.get_segment(seq);
+		bool is_retransmit = seg.sent;
 
-    void ReliableSender::mark_acked(uint32_t seq)
-    {
-        if (seq == 0 || seq > state_.total_segments)
-        {
-            return;
-        }
-        auto &seg = segments_[seq - 1];
-        if (!seg.acked)
-        {
-            seg.acked = true;
-            seg.sack_missing = false;
-        }
-    }
+		// 检查重传次数，超过限制认为连接失败
+		if (is_retransmit) {
+			seg.retrans_count++;
+			if (seg.retrans_count > MAX_RETRANSMITS) {
+				cerr << "[ERROR] Segment " << seq
+					 << " exceeded max retransmits (" << MAX_RETRANSMITS
+					 << "), connection lost\n";
+				send_rst();
+				throw std::runtime_error(
+					"Connection lost: max retransmits "
+					"exceeded");
+			}
+		}
 
-    void ReliableSender::handle_ack(const Packet &pkt, bool &fast_retx_needed)
-    {
-        state_.peer_wnd = std::min<uint16_t>(pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
-        uint32_t ack = pkt.header.ack;
+		PacketHeader hdr{};
+		hdr.seq = isn_ + seq;
+		hdr.ack = 0;
+		hdr.flags = FLAG_DATA;
+		hdr.wnd = window_size_;
+		hdr.len = static_cast<uint16_t>(seg.data.size());
+		hdr.sack_mask = 0;
 
-        if (ack > state_.base_seq)
-        {
-            for (uint32_t s = state_.base_seq; s < ack && s <= state_.total_segments; ++s)
-            {
-                mark_acked(s);
-            }
-            state_.base_seq = ack;
-            state_.dup_ack_count = 0;
-            if (state_.in_fast_recovery)
-            {
-                state_.cwnd = state_.ssthresh;
-                state_.in_fast_recovery = false;
-            }
-            if (state_.cwnd < state_.ssthresh)
-            {
-                state_.cwnd += 1.0;
-            }
-            else
-            {
-                state_.cwnd += 1.0 / state_.cwnd;
-            }
-        }
-        else if (ack == state_.base_seq && state_.base_seq <= state_.total_segments)
-        {
-            state_.dup_ack_count++;
-            if (state_.dup_ack_count == 3 && !state_.in_fast_recovery)
-            {
-                std::cout << "[LOSS] Detected 3 duplicate ACKs for seq=" << state_.base_seq
-                          << ", triggering fast retransmit (cwnd: " << state_.cwnd
-                          << " -> " << (state_.cwnd / 2.0 + 3.0) << ")\n";
-                state_.ssthresh = std::max(2.0, state_.cwnd / 2.0);
-                state_.cwnd = state_.ssthresh + 3.0;
-                state_.in_fast_recovery = true;
-                fast_retx_needed = true;
-            }
-            else if (state_.in_fast_recovery)
-            {
-                state_.cwnd += 1.0;
-            }
-        }
+		if (stats_.get_start_time() == 0) {
+			stats_.set_start_time(now_ms());
+		}
 
-        uint32_t mask = pkt.header.sack_mask;
-        int gap_retx_count = 0;
-        uint64_t now = now_ms();
-        for (std::size_t i = 0; i < SACK_BITS; ++i)
-        {
-            if (mask & (1u << i))
-            {
-                mark_acked(ack + 1 + static_cast<uint32_t>(i));
-            }
-        }
-        for (std::size_t i = 0; i < SACK_BITS; ++i)
-        {
-            uint32_t seq = ack + 1 + static_cast<uint32_t>(i);
-            if (seq > state_.total_segments)
-            {
-                break;
-            }
-            auto &seg = segments_[seq - 1];
-            if (seg.sent && !seg.acked)
-            {
-                if (mask & (1u << i))
-                {
-                    seg.sack_missing = false;
-                }
-                else if (!seg.sack_missing && gap_retx_count < MAX_SACK_RETX_PER_ACK &&
-                         (now >= seg.last_send + MIN_GAP_RETX_INTERVAL_MS))
-                {
-                    seg.sack_missing = true;
-                    ++gap_retx_count;
-                    std::cout << "[RETRANSMIT] SACK gap seq=" << seq << "\n";
-                    retransmit(seq, seg);
-                }
-            }
-        }
-        while (state_.base_seq <= state_.total_segments && segments_[state_.base_seq - 1].acked)
-        {
-            state_.base_seq++;
-        }
-    }
+		send_raw(hdr, seg.data);
+		seg.sent = true;
+		seg.last_send = now_ms();
 
-    bool ReliableSender::all_acked() const
-    {
-        for (const auto &s : segments_)
-        {
-            if (!s.acked)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
+		if (is_retransmit) {
+			stats_.record_retransmit();
+		}
+	}
 
-    void ReliableSender::handle_timeouts()
-    {
-        uint64_t now = now_ms();
-        for (uint32_t i = state_.base_seq; i <= state_.total_segments; ++i)
-        {
-            if (!segments_[i - 1].acked && segments_[i - 1].sent &&
-                now - segments_[i - 1].last_send > DATA_TIMEOUT_MS)
-            {
-                timeout_count_++;
-                std::cout << "[TIMEOUT] Packet seq=" << i << " timed out after "
-                          << (now - segments_[i - 1].last_send) << "ms, retransmitting (cwnd: "
-                          << state_.cwnd << " -> 1.0, ssthresh: " << state_.ssthresh
-                          << " -> " << (state_.cwnd / 2.0) << ")\n";
-                state_.ssthresh = std::max(2.0, state_.cwnd / 2.0);
-                state_.cwnd = 1.0;
-                state_.dup_ack_count = 0;
-                state_.in_fast_recovery = false;
-                retransmit(i, segments_[i - 1]);
-            }
-        }
-    }
+	/**
+	 * 处理新ACK（推进窗口）
+	 * ack: 新的累积确认序号
+	 * 标记所有 < ack 的段为已确认，并调用拥塞控制
+	 */
+	void ReliableSender::handle_new_ack(uint32_t ack) {
+		// 标记所有被确认的段
+		for (uint32_t s = window_.get_base_seq();
+			 s < ack && s <= window_.total_segments(); ++s) {
+			window_.mark_acked(s);
+		}
 
-    void ReliableSender::try_send_data()
-    {
-        std::size_t window_cap = std::min<std::size_t>(window_size_, state_.peer_wnd ? state_.peer_wnd : window_size_);
-        window_cap = std::min<std::size_t>(window_cap, static_cast<std::size_t>(std::floor(state_.cwnd)));
-        window_cap = std::min<std::size_t>(window_cap, SACK_BITS);
+		window_.set_base_seq(ack);
+		congestion_.on_new_ack();
+	}
 
-        while (state_.next_seq <= state_.total_segments && state_.next_seq < state_.base_seq + window_cap)
-        {
-            auto &seg = segments_[state_.next_seq - 1];
-            if (!seg.sent)
-            {
-                retransmit(state_.next_seq, seg);
-                ++state_.next_seq;
-            }
-            else
-            {
-                break;
-            }
-        }
-    }
+	/**
+	 * 处理重复ACK
+	 * 累积3个重复ACK后触发快速重传
+	 */
+	void ReliableSender::handle_duplicate_ack(uint32_t ack) {
+		congestion_.on_duplicate_ack();
 
-    void ReliableSender::try_send_fin()
-    {
-        uint64_t now = now_ms();
-        if (fin_complete_)
-        {
-            return;
-        }
-        if (!fin_sent_)
-        {
-            if (!all_acked())
-            {
-                return;
-            }
-            PacketHeader fin{};
-            fin.seq = state_.total_segments + 1;
-            fin.ack = 0;
-            fin.flags = FLAG_FIN;
-            fin.wnd = window_size_;
-            fin.len = 0;
-            fin.sack_mask = 0;
-            send_raw(fin, {});
-            fin_sent_ = true;
-            fin_last_send_ = now;
-            fin_retry_count_ = 0;
-            std::cout << "[DEBUG] Sent FIN\n";
-            return;
-        }
-        if (now - fin_last_send_ > HANDSHAKE_TIMEOUT_MS && fin_retry_count_ < MAX_FIN_RETRIES)
-        {
-            PacketHeader fin{};
-            fin.seq = state_.total_segments + 1;
-            fin.ack = 0;
-            fin.flags = FLAG_FIN;
-            fin.wnd = window_size_;
-            fin.len = 0;
-            fin.sack_mask = 0;
-            send_raw(fin, {});
-            fin_last_send_ = now;
-            fin_retry_count_++;
-            std::cout << "[DEBUG] Retrying FIN (attempt " << fin_retry_count_ << "/" << MAX_FIN_RETRIES << ")\n";
-        }
-    }
+		if (congestion_.should_fast_retransmit()) {
+			congestion_.on_fast_retransmit();
+			fast_retransmit();
+		}
+	}
 
-    void ReliableSender::process_network()
-    {
-        bool fast_retx_needed = false;
-        Packet pkt{};
-        sockaddr_in from{};
-        if (wait_for_packet(pkt, from, 50))
-        {
-            if (!same_endpoint(from, remote_))
-            {
-                return;
-            }
-            if ((pkt.header.flags & FLAG_FIN) && (pkt.header.flags & FLAG_ACK))
-            {
-                PacketHeader final_ack{};
-                final_ack.seq = pkt.header.ack;
-                final_ack.ack = pkt.header.seq + 1;
-                final_ack.flags = FLAG_ACK;
-                final_ack.wnd = window_size_;
-                final_ack.len = 0;
-                final_ack.sack_mask = 0;
-                send_raw(final_ack, {});
-                fin_complete_ = true;
-                std::cout << "[DEBUG] Received FIN+ACK, sent final ACK\n";
-                return;
-            }
-            if (pkt.header.flags & FLAG_ACK)
-            {
-                handle_ack(pkt, fast_retx_needed);
-                if (fast_retx_needed && state_.base_seq <= state_.total_segments)
-                {
-                    fast_retransmit_count_++;
-                    std::cout << "[RETRANSMIT] Fast retransmit seq=" << state_.base_seq << "\n";
-                    retransmit(state_.base_seq, segments_[state_.base_seq - 1]);
-                }
-            }
-        }
-    }
+	/**
+	 * 处理选择性确认（SACK）
+	 * ack: 累积确认序号
+	 * mask: SACK掩码，标记ack之后32个段的到达情况
+	 * 根据掩码标记已到达的段，并重传缺口段
+	 */
+	void ReliableSender::handle_sack(uint32_t ack, uint32_t mask) {
+		// 标记SACK确认的段
+		for (size_t i = 0; i < SACK_BITS; ++i) {
+			if (mask & (1u << i)) {
+				window_.mark_acked(ack + 1 + static_cast<uint32_t>(i));
+			}
+		}
 
-    int ReliableSender::run()
-    {
-        if (init_socket_lib() != 0)
-        {
-            return 1;
-        }
+		// 处理SACK缺口重传（限速：单次ACK最多重传4个）
+		int gap_retx_count = 0;
+		uint64_t now = now_ms();
+		for (size_t i = 0; i < SACK_BITS; ++i) {
+			uint32_t seq = ack + 1 + static_cast<uint32_t>(i);
+			if (seq > window_.total_segments()) {
+				break;
+			}
+			auto& seg = window_.get_segment(seq);
+			if (seg.sent && !seg.acked && !(mask & (1u << i))) {
+				// 该段已发送但未确认，且不在SACK中 -> 缺口
+				uint64_t last_gap =
+					seg.last_sack_retx ? seg.last_sack_retx : seg.last_send;
+				if (gap_retx_count < MAX_SACK_RETX_PER_ACK &&
+					now >= last_gap + MIN_GAP_RETX_INTERVAL_MS) {
+					// 限速重传：避免频繁重传同一个段
+					seg.last_sack_retx = now;
+					++gap_retx_count;
+					cout << "[RETRANSMIT] SACK gap seq=" << seq << "\n";
+					transmit_segment(seq);
+				}
+			}
+		}
+	}
 
-        sock_ = socket(AF_INET, SOCK_DGRAM, 0);
-        if (!socket_valid(sock_))
-        {
-            std::cerr << "Failed to create socket\n";
-            return 1;
-        }
+	void ReliableSender::handle_ack(const Packet& pkt) {
+		// 更新最后收到ACK的时间（用于全局超时检测）
+		last_ack_time_ = now_ms();
 
-        // 
-        if (local_port_ > 0)
-        {
-            sockaddr_in local_addr{};
-            local_addr.sin_family = AF_INET;
-            local_addr.sin_addr.s_addr = INADDR_ANY;
-            local_addr.sin_port = htons(local_port_);
-            if (bind(sock_, reinterpret_cast<const sockaddr *>(&local_addr), sizeof(local_addr)) < 0)
-            {
-                std::cerr << "Failed to bind to local port " << local_port_ << "\n";
-                return 1;
-            }
-            std::cout << "[DEBUG] Bound to local port " << local_port_ << "\n";
-        }
-        else
-        {
-            std::cout << "[DEBUG] Using system-assigned port\n";
-        }
+		peer_wnd_ = std::min<uint16_t>(pkt.header.wnd,
+									   static_cast<uint16_t>(SACK_BITS));
+		uint32_t ack_abs = pkt.header.ack;
+		if (ack_abs <= isn_) {
+			return;
+		}
+		uint32_t ack = ack_abs - isn_;
 
-        if (inet_pton(AF_INET, dest_ip_.c_str(), &remote_.sin_addr) <= 0)
-        {
-            std::cerr << "Invalid receiver address\n";
-            return 1;
-        }
+		if (ack > window_.get_base_seq()) {
+			handle_new_ack(ack);
+		} else if (ack == window_.get_base_seq() &&
+				   window_.get_base_seq() <= window_.total_segments()) {
+			handle_duplicate_ack(ack);
+		}
 
-        if (!handshake())
-        {
-            std::cerr << "Handshake failed\n";
-            return 1;
-        }
+		handle_sack(ack, pkt.header.sack_mask);
+		window_.advance_base_seq();
+	}
 
-        std::ifstream in(file_path_, std::ios::binary);
-        if (!in)
-        {
-            std::cerr << "Cannot open input file\n";
-            return 1;
-        }
-        file_data_ = std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        uint32_t total_segments = static_cast<uint32_t>((file_data_.size() + MAX_PAYLOAD - 1) / MAX_PAYLOAD);
-        std::cout << "[DEBUG] File size: " << file_data_.size() << " bytes, segments: " << total_segments << "\n";
-        segments_.assign(total_segments, {});
-        for (uint32_t i = 0; i < total_segments; ++i)
-        {
-            std::size_t start = i * MAX_PAYLOAD;
-            std::size_t len = std::min<std::size_t>(MAX_PAYLOAD, file_data_.size() - start);
-            segments_[i].data.insert(segments_[i].data.end(), file_data_.begin() + start,
-                                     file_data_.begin() + start + len);
-        }
+	/**
+	 * 检查并处理超时的数据段
+	 * 遍历窗口内所有已发送但未确认的段
+	 * 如果超过DATA_TIMEOUT_MS，则触发超时重传和拥塞控制
+	 */
+	void ReliableSender::handle_timeouts() {
+		uint64_t now = now_ms();
+		for (uint32_t i = window_.get_base_seq(); i <= window_.total_segments();
+			 ++i) {
+			auto& seg = window_.get_segment(i);
+			if (!seg.acked && seg.sent &&
+				now - seg.last_send > DATA_TIMEOUT_MS) {
+				stats_.record_timeout();
+				cout << "[TIMEOUT] Packet seq=" << i << " timed out after "
+					 << (now - seg.last_send) << "ms, retransmitting\n";
+				congestion_.on_timeout();
+				transmit_segment(i);
+			}
+		}
+	}
 
-        state_.total_segments = total_segments;
-        state_.peer_wnd = state_.peer_wnd ? state_.peer_wnd : window_size_;
-        state_.ssthresh = std::max<double>(2.0, state_.peer_wnd);
+	void ReliableSender::fast_retransmit() {
+		if (window_.get_base_seq() <= window_.total_segments()) {
+			stats_.record_fast_retransmit();
+			cout << "[RETRANSMIT] Fast retransmit seq="
+				 << window_.get_base_seq() << "\n";
+			transmit_segment(window_.get_base_seq());
+		}
+	}
 
-        std::cout << "[DEBUG] Starting transmission - Window: " << window_size_
-                  << ", Initial cwnd: " << state_.cwnd
-                  << ", ssthresh: " << state_.ssthresh << "\n";
+	/**
+	 * 尝试发送新数据
+	 * 根据窗口大小（本地、对端、拥塞窗口的最小值）发送数据
+	 * 只发送未发送过的段，不处理重传
+	 */
+	void ReliableSender::try_send_data() {
+		// 计算实际窗口大小 = min(本地窗口, 对端窗口, floor(cwnd), SACK位宽)
+		size_t window_cap = window_.calculate_window_size(
+			window_size_, peer_wnd_ ? peer_wnd_ : window_size_,
+			congestion_.get_cwnd(), SACK_BITS);
 
-        while (!fin_complete_)
-        {
-            try_send_data();
-            process_network();
-            handle_timeouts();
-            if (!data_timing_recorded_ && all_acked())
-            {
-                if (start_time_ == 0)
-                {
-                    start_time_ = now_ms();
-                }
-                end_time_ = now_ms();
-                data_timing_recorded_ = true;
-            }
-            try_send_fin();
+		while (window_.get_next_seq() <= window_.total_segments() &&
+			   window_.get_next_seq() < window_.get_base_seq() + window_cap) {
+			auto& seg = window_.get_segment(window_.get_next_seq());
+			if (!seg.sent) {
+				transmit_segment(window_.get_next_seq());
+				window_.advance_next_seq();
+			} else {
+				break;
+			}
+		}
+	}
 
-            if (fin_sent_ && !fin_complete_ && fin_retry_count_ >= MAX_FIN_RETRIES)
-            {
-                std::cerr << "[WARN] FIN handshake failed after retries\n";
-                break;
-            }
-        }
+	/**
+	 * 尝试发送FIN包结束连接
+	 * 只有在所有数据段都被确认后才发送FIN
+	 * 支持超时重传，最多MAX_FIN_RETRIES次
+	 */
+	void ReliableSender::try_send_fin() {
+		uint64_t now = now_ms();
+		if (fin_complete_) {
+			return;
+		}
+		if (!fin_sent_) {
+			if (!window_.all_acked()) {
+				return;
+			}
+			PacketHeader fin{};
+			fin.seq = isn_ + window_.total_segments() + 1;
+			fin.ack = 0;
+			fin.flags = FLAG_FIN;
+			fin.wnd = window_size_;
+			fin.len = 0;
+			fin.sack_mask = 0;
+			send_raw(fin, {});
+			fin_sent_ = true;
+			fin_last_send_ = now;
+			fin_retry_count_ = 0;
+			cout << "[DEBUG] Sent FIN\n";
+			return;
+		}
+		if (now - fin_last_send_ > HANDSHAKE_TIMEOUT_MS &&
+			fin_retry_count_ < MAX_FIN_RETRIES) {
+			PacketHeader fin{};
+			fin.seq = isn_ + window_.total_segments() + 1;
+			fin.ack = 0;
+			fin.flags = FLAG_FIN;
+			fin.wnd = window_size_;
+			fin.len = 0;
+			fin.sack_mask = 0;
+			send_raw(fin, {});
+			fin_last_send_ = now;
+			fin_retry_count_++;
+			cout << "[DEBUG] Retrying FIN (attempt " << fin_retry_count_ << "/"
+				 << MAX_FIN_RETRIES << ")\n";
+		}
+	}
 
-        if (!data_timing_recorded_)
-        {
-            if (start_time_ == 0)
-            {
-                start_time_ = now_ms();
-            }
-            end_time_ = now_ms();
-        }
-        double elapsed_s = (end_time_ > start_time_) ? (end_time_ - start_time_) / 1000.0 : 0.0;
-        double throughput =
-            (elapsed_s > 0) ? static_cast<double>(file_data_.size()) / elapsed_s / 1024.0 / 1024.0 : 0.0;
-        std::cout << "[INFO] Transfer completed\n";
-        std::cout << "[INFO] Final cwnd: " << state_.cwnd << ", Final ssthresh: " << state_.ssthresh << "\n";
-        std::cout << "[STATS] Total retransmits: " << retransmit_count_
-                  << " (Timeout: " << timeout_count_
-                  << ", Fast retransmit: " << fast_retransmit_count_ << ")\n";
-        std::cout << "[STATS] Packet loss rate: "
-                  << (state_.total_segments > 0 ? (retransmit_count_ * 100.0 / state_.total_segments) : 0.0)
-                  << "%\n";
-        std::cout << "Sent " << file_data_.size() << " bytes in " << elapsed_s << " s, avg throughput " << throughput
-                  << " MiB/s\n";
+	void ReliableSender::handle_fin_ack() {
+		PacketHeader final_ack{};
+		final_ack.seq = peer_isn_ + 1;
+		final_ack.ack = isn_ + window_.total_segments() + 2;
+		final_ack.flags = FLAG_ACK;
+		final_ack.wnd = window_size_;
+		final_ack.len = 0;
+		final_ack.sack_mask = 0;
+		send_raw(final_ack, {});
+		fin_complete_ = true;
+		cout << "[DEBUG] Received FIN+ACK, sent final ACK\n";
+	}
 
-        if (!fin_complete_)
-        {
-            std::cerr << "[WARN] FIN handshake did not complete cleanly\n";
-        }
+	void ReliableSender::process_network() {
+		Packet pkt{};
+		sockaddr_in from{};
+		if (wait_for_packet(pkt, from, 50)) {
+			if (!same_endpoint(from, remote_)) {
+				return;
+			}
+			if ((pkt.header.flags & FLAG_FIN) &&
+				(pkt.header.flags & FLAG_ACK)) {
+				handle_fin_ack();
+				return;
+			}
+			if (pkt.header.flags & FLAG_ACK) {
+				handle_ack(pkt);
+			}
+		}
+	}
 
-        return fin_complete_ ? 0 : 1;
-    }
+	int ReliableSender::run() {
+		if (init_socket_lib() != 0) {
+			return 1;
+		}
 
-} // namespace rtp
+		sock_ = socket(AF_INET, SOCK_DGRAM, 0);
+		if (!socket_valid(sock_)) {
+			cerr << "Failed to create socket\n";
+			return 1;
+		}
+
+		// 绑定本地端口（可选）
+		if (local_port_ > 0) {
+			sockaddr_in local_addr{};
+			local_addr.sin_family = AF_INET;
+			local_addr.sin_addr.s_addr = INADDR_ANY;
+			local_addr.sin_port = htons(local_port_);
+			if (bind(sock_, reinterpret_cast<const sockaddr*>(&local_addr),
+					 sizeof(local_addr)) < 0) {
+				cerr << "Failed to bind to local port " << local_port_ << "\n";
+				return 1;
+			}
+			cout << "[DEBUG] Bound to local port " << local_port_ << "\n";
+		} else {
+			cout << "[DEBUG] Using system-assigned port\n";
+		}
+
+		// 使用 inet_addr 替代 inet_pton 以兼容 MinGW
+		remote_.sin_addr.s_addr = inet_addr(dest_ip_.c_str());
+		if (remote_.sin_addr.s_addr == INADDR_NONE) {
+			cerr << "Invalid receiver address\n";
+			return 1;
+		}
+
+		sockaddr_in local_addr{};
+		int addr_len = sizeof(local_addr);
+		if (getsockname(sock_, reinterpret_cast<sockaddr*>(&local_addr),
+						&addr_len) != 0) {
+			local_addr.sin_family = AF_INET;
+			local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+			local_addr.sin_port = 0;
+		}
+		isn_ = generate_isn(local_addr, remote_);
+
+		if (!handshake()) {
+			cerr << "Handshake failed\n";
+			return 1;
+		}
+
+		ifstream in(file_path_, std::ios::binary);
+		if (!in) {
+			cerr << "Cannot open input file\n";
+			return 1;
+		}
+		file_data_ = vector<uint8_t>((std::istreambuf_iterator<char>(in)),
+									 std::istreambuf_iterator<char>());
+
+		cout << "[DEBUG] File size: " << file_data_.size() << " bytes\n";
+		window_.initialize(file_data_);
+		cout << "[DEBUG] Total segments: " << window_.total_segments() << "\n";
+
+		peer_wnd_ = peer_wnd_ ? peer_wnd_ : window_size_;
+		congestion_ = CongestionControl(std::max<double>(2.0, peer_wnd_));
+
+		cout << "[DEBUG] Starting transmission - Window: " << window_size_
+			 << ", Initial cwnd: " << congestion_.get_cwnd()
+			 << ", ssthresh: " << congestion_.get_ssthresh() << "\n";
+
+		// 初始化全局超时检测
+		last_ack_time_ = now_ms();
+
+		while (!fin_complete_) {
+			// 全局超时检测：长时间无ACK响应
+			if (now_ms() - last_ack_time_ > GLOBAL_TIMEOUT_MS) {
+				cerr << "[TIMEOUT] No ACK received for "
+					 << GLOBAL_TIMEOUT_MS / 1000 << "s, connection lost\n";
+				send_rst();
+				return 1;
+			}
+
+			try_send_data();
+			process_network();
+			handle_timeouts();
+
+			if (!data_timing_recorded_ && window_.all_acked()) {
+				if (stats_.get_start_time() == 0) {
+					stats_.set_start_time(now_ms());
+				}
+				stats_.set_end_time(now_ms());
+				data_timing_recorded_ = true;
+			}
+
+			try_send_fin();
+
+			if (fin_sent_ && !fin_complete_ &&
+				fin_retry_count_ >= MAX_FIN_RETRIES) {
+				cerr << "[WARN] FIN handshake failed after retries\n";
+				break;
+			}
+		}
+
+		if (!data_timing_recorded_) {
+			if (stats_.get_start_time() == 0) {
+				stats_.set_start_time(now_ms());
+			}
+			stats_.set_end_time(now_ms());
+		}
+
+		stats_.print_sender_stats(file_data_.size(), window_.total_segments(),
+								  congestion_.get_cwnd(),
+								  congestion_.get_ssthresh());
+
+		if (!fin_complete_) {
+			cerr << "[WARN] FIN handshake did not complete cleanly\n";
+		}
+
+		return fin_complete_ ? 0 : 1;
+	}
+
+}  // namespace rtp

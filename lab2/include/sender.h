@@ -1,81 +1,81 @@
 #pragma once
 
-#include "rtp.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace rtp
-{
+#include "congestion_control.h"
+#include "rtp.h"
+#include "send_window.h"
+#include "transfer_stats.h"
 
-    class ReliableSender
-    {
-    public:
-        ReliableSender(std::string dest_ip, uint16_t dest_port, std::string file_path, uint16_t window_size, uint16_t local_port = 0);
-        ~ReliableSender();
+namespace rtp {
+	using std::string;
+	using std::vector;
+	// 可靠发送端
+	class ReliableSender {
+	   public:
+		ReliableSender(string dest_ip, uint16_t dest_port, string file_path,
+					   uint16_t window_size, uint16_t local_port = 0);
+		~ReliableSender();
 
-        int run();
+		int run();
 
-    private:
-        struct SegmentInfo
-        {
-            std::vector<uint8_t> data;
-            bool sent{false};
-            bool acked{false};
-            uint64_t last_send{0};
-            bool sack_missing{false};
-        };
+	   private:
+		// === 网络通信 ===
+		bool wait_for_packet(Packet& pkt, sockaddr_in& from, int timeout_ms);
+		int send_raw(const PacketHeader& hdr, const vector<uint8_t>& payload);
+		void send_rst();  // 发送RST段，强制终止连接
 
-        struct TxState
-        {
-            uint32_t base_seq{1};
-            uint32_t next_seq{1};
-            uint32_t total_segments{0};
-            uint32_t dup_ack_count{0};
-            double cwnd{1.0};
-            double ssthresh{16.0};
-            bool in_fast_recovery{false};
-            uint16_t peer_wnd{0};
-        };
+		// === 连接管理 ===
+		bool handshake();
+		void try_send_fin();
+		void handle_fin_ack();
 
-        bool wait_for_packet(Packet &pkt, sockaddr_in &from, int timeout_ms);
-        int send_raw(const PacketHeader &hdr, const std::vector<uint8_t> &payload);
-        bool handshake();
-        void retransmit(uint32_t seq, SegmentInfo &seg);
-        std::size_t inflight_count() const;
-        void mark_acked(uint32_t seq);
-        void handle_ack(const Packet &pkt, bool &fast_retx_needed);
-        bool all_acked() const;
-        void handle_timeouts();
-        void try_send_data();
-        void try_send_fin();
-        void process_network();
+		// === 数据传输 ===
+		void transmit_segment(uint32_t seq);
+		void try_send_data();
+		void process_network();
 
-        socket_t sock_{INVALID_SOCKET_VALUE};
-        sockaddr_in remote_{};
-        std::string dest_ip_;
-        uint16_t dest_port_{0};
-        uint16_t local_port_{0};
-        std::string file_path_;
-        uint16_t window_size_{0};
+		// === ACK处理 ===
+		void handle_ack(const Packet& pkt);
+		void handle_new_ack(uint32_t ack);
+		void handle_duplicate_ack(uint32_t ack);
+		void handle_sack(uint32_t ack, uint32_t mask);
 
-        std::vector<SegmentInfo> segments_;
-        TxState state_{};
-        bool fin_sent_{false};
-        bool fin_complete_{false};
-        uint64_t fin_last_send_{0};
-        int fin_retry_count_{0};
-        std::vector<uint8_t> file_data_;
+		// === 重传处理 ===
+		void handle_timeouts();
+		void fast_retransmit();
 
-        uint64_t start_time_{0};
-        uint64_t end_time_{0};
-        bool data_timing_recorded_{false};
+		// === Socket相关 ===
+		socket_t sock_{INVALID_SOCKET_VALUE};
+		sockaddr_in remote_{};
+		string dest_ip_;
+		uint16_t dest_port_{0};
+		uint16_t local_port_{0};
+		uint32_t isn_{0};
+		uint32_t peer_isn_{0};
 
-        // 统计信息
-        uint32_t retransmit_count_{0};
-        uint32_t timeout_count_{0};
-        uint32_t fast_retransmit_count_{0};
-    };
+		// === 文件与配置 ===
+		string file_path_;
+		uint16_t window_size_{0};
+		uint16_t peer_wnd_{0};
+		vector<uint8_t> file_data_;
 
-} // namespace rtp
+		// === 模块化组件 ===
+		SendWindow window_;				// 发送窗口管理
+		CongestionControl congestion_;	// 拥塞控制
+		TransferStats stats_;			// 统计信息
+
+		// === FIN状态 ===
+		bool fin_sent_{false};
+		bool fin_complete_{false};
+		uint64_t fin_last_send_{0};
+		int fin_retry_count_{0};
+		bool data_timing_recorded_{false};
+
+		// === 超时检测 ===
+		uint64_t last_ack_time_{0};	 // 最后收到ACK的时间
+	};
+
+}  // namespace rtp
