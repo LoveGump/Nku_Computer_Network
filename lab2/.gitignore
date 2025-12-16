@@ -1,0 +1,6 @@
+*.exe
+build/
+lab2test/
+clumsy/
+*.pdf
+*.bat
