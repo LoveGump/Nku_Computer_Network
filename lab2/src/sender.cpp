@@ -188,6 +188,7 @@ namespace rtp {
 		// 检查重传次数，超过限制认为连接失败
 		if (is_retransmit) {
 			seg.retrans_count++;
+			seg.is_retransmitted = true;  // 标记为重传（Karn算法）
 			if (seg.retrans_count > MAX_RETRANSMITS) {
 				cerr << "[ERROR] Segment " << seq
 					 << " exceeded max retransmits (" << MAX_RETRANSMITS
@@ -197,6 +198,10 @@ namespace rtp {
 					"Connection lost: max retransmits "
 					"exceeded");
 			}
+		} else {
+			// 首次发送，记录时间戳用于RTT测量
+			seg.send_timestamp = now_ms();
+			seg.is_retransmitted = false;
 		}
 
 		PacketHeader hdr{};
@@ -226,6 +231,18 @@ namespace rtp {
 	 * 标记所有 < ack 的段为已确认，并调用拥塞控制
 	 */
 	void ReliableSender::handle_new_ack(uint32_t ack) {
+		// 测量RTT（Karn算法：只测量未重传的段）
+		for (uint32_t i = window_.get_base_seq();
+			 i < ack && i <= window_.total_segments(); ++i) {
+			auto& seg = window_.get_segment(i);
+			if (!seg.acked && seg.sent && !seg.is_retransmitted &&
+				seg.send_timestamp > 0) {
+				uint64_t rtt_sample = now_ms() - seg.send_timestamp;
+				update_rto(rtt_sample);
+				break;	// 只测量一个RTT样本
+			}
+		}
+
 		// 标记所有被确认的段
 		for (uint32_t s = window_.get_base_seq();
 			 s < ack && s <= window_.total_segments(); ++s) {
@@ -234,6 +251,101 @@ namespace rtp {
 
 		window_.set_base_seq(ack);
 		congestion_.on_new_ack();
+	}
+
+	/**
+	 * 更新RTO（Jacobson/Karels算法）
+	 * rtt_sample: RTT样本（毫秒）
+	 * 公式：
+	 *   SRTT = (1-α) × SRTT + α × RTT  (α = 1/8)
+	 *   RTTVAR = (1-β) × RTTVAR + β × |SRTT - RTT|  (β = 1/4)
+	 *   RTO = SRTT + 4 × RTTVAR
+	 */
+	// ========================================
+	// 窗口探测
+	// ========================================
+
+	/**
+	 * 发送窗口探测段
+	 * 当对端窗口为零时，发送空ACK探测对端是否恢复窗口
+	 */
+	void ReliableSender::send_window_probe() {
+		PacketHeader hdr;
+		hdr.seq = window_.get_next_seq();  // 使用当前窗口序列号
+		hdr.ack = 0;
+		hdr.wnd = window_size_;
+		hdr.len = 0;		   // 空探测包
+		hdr.flags = FLAG_ACK;  // 仅ACK标志
+		hdr.sack_mask = 0;
+		hdr.checksum = 0;
+
+		vector<uint8_t> empty_payload;
+		send_raw(hdr, empty_payload);
+		probe_seq_ = hdr.seq;
+		cout << "[探测] 发送窗口探测包 seq=" << hdr.seq
+			 << " backoff=" << persist_backoff_ << std::endl;
+	}
+
+	/**
+	 * 处理窗口探测逻辑
+	 * 在zero_window_状态下，定期发送探测包，并指数退避
+	 */
+	void ReliableSender::handle_window_probe() {
+		if (!zero_window_) {
+			return;	 // 非零窗口，不需要探测
+		}
+
+		uint64_t now = now_ms();
+		if (now >= persist_timer_) {
+			// 持续计时器超时，发送探测包
+			send_window_probe();
+
+			// 指数退避：5s → 10s → 20s → 40s → 60s(max)
+			persist_backoff_ = std::min(persist_backoff_ + 1, 12);
+			int interval = std::min(5000 * (1 << persist_backoff_), 60000);
+			persist_timer_ = now + interval;
+		}
+	}
+
+	// ========================================
+	// RTO自适应
+	// ========================================
+
+	/**
+	 * 更新RTO（Jacobson/Karels算法）
+	 * 使用RTT样本更新SRTT和RTTVAR，然后计算新的RTO
+	 */
+	void ReliableSender::update_rto(uint64_t rtt_sample) {
+		constexpr double ALPHA = 0.125;	 // 1/8
+		constexpr double BETA = 0.25;	 // 1/4
+		constexpr int MIN_RTO = 200;	 // 最小RTO 200ms
+		constexpr int MAX_RTO = 60000;	 // 最大RTO 60s
+
+		if (!rtt_initialized_) {
+			// 首次RTT样本：直接初始化
+			srtt_ = static_cast<double>(rtt_sample);
+			rttvar_ = srtt_ / 2.0;
+			rtt_initialized_ = true;
+		} else {
+			// 后续样本：指数加权平均
+			double delta = static_cast<double>(rtt_sample) - srtt_;
+			srtt_ = (1.0 - ALPHA) * srtt_ + ALPHA * rtt_sample;
+			rttvar_ = (1.0 - BETA) * rttvar_ + BETA * std::abs(delta);
+		}
+
+		// 计算RTO = SRTT + 4 × RTTVAR
+		int new_rto = static_cast<int>(srtt_ + 4.0 * rttvar_);
+		int old_rto = rto_;
+		rto_ = std::max(MIN_RTO, std::min(new_rto, MAX_RTO));
+
+		// 只在RTO值改变时打印日志
+		if (rto_ != old_rto) {
+			cout << "[RTO] RTT=" << rtt_sample
+				 << "ms, SRTT=" << static_cast<int>(srtt_)
+				 << "ms, RTTVAR=" << static_cast<int>(rttvar_)
+				 << "ms, RTO=" << rto_ << "ms (changed from " << old_rto
+				 << "ms)\n";
+		}
 	}
 
 	/**
@@ -292,14 +404,31 @@ namespace rtp {
 		// 更新最后收到ACK的时间（用于全局超时检测）
 		last_ack_time_ = now_ms();
 
-		peer_wnd_ = std::min<uint16_t>(pkt.header.wnd,
-									   static_cast<uint16_t>(SACK_BITS));
+		// 获取接收方窗口大小
+		uint16_t new_peer_wnd = std::min<uint16_t>(
+			pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
+
+		// 检测零窗口状态，启动/停止持续计时器
+		if (new_peer_wnd == 0 && !zero_window_) {
+			// 进入零窗口状态
+			zero_window_ = true;
+			persist_backoff_ = 0;
+			persist_timer_ = now_ms() + 5000;  // 首次探测：5秒
+			cout << "[窗口] 对端窗口为零，启动持续计时器" << std::endl;
+		} else if (new_peer_wnd > 0 && zero_window_) {
+			// 离开零窗口状态
+			zero_window_ = false;
+			persist_backoff_ = 0;
+			cout << "[窗口] 对端窗口恢复：" << new_peer_wnd << std::endl;
+		}
+
+		peer_wnd_ = new_peer_wnd;
+
 		uint32_t ack_abs = pkt.header.ack;
 		if (ack_abs <= isn_) {
 			return;
 		}
 		uint32_t ack = ack_abs - isn_;
-
 		if (ack > window_.get_base_seq()) {
 			handle_new_ack(ack);
 		} else if (ack == window_.get_base_seq() &&
@@ -321,12 +450,16 @@ namespace rtp {
 		for (uint32_t i = window_.get_base_seq(); i <= window_.total_segments();
 			 ++i) {
 			auto& seg = window_.get_segment(i);
+			// 使用动态RTO代替固定超时值
 			if (!seg.acked && seg.sent &&
-				now - seg.last_send > DATA_TIMEOUT_MS) {
+				now - seg.last_send > static_cast<uint64_t>(rto_)) {
 				stats_.record_timeout();
 				cout << "[TIMEOUT] Packet seq=" << i << " timed out after "
-					 << (now - seg.last_send) << "ms, retransmitting\n";
+					 << (now - seg.last_send) << "ms (RTO=" << rto_
+					 << "ms), retransmitting\n";
 				congestion_.on_timeout();
+				// 超时后倍增RTO（Karn算法）
+				rto_ = std::min(rto_ * 2, 60000);
 				transmit_segment(i);
 			}
 		}
@@ -347,10 +480,14 @@ namespace rtp {
 	 * 只发送未发送过的段，不处理重传
 	 */
 	void ReliableSender::try_send_data() {
+		// 零窗口时由窗口探测机制处理，这里不发送常规数据
+		if (peer_wnd_ == 0) {
+			return;	 // 零窗口，等待窗口探测
+		}
+
 		// 计算实际窗口大小 = min(本地窗口, 对端窗口, floor(cwnd), SACK位宽)
 		size_t window_cap = window_.calculate_window_size(
-			window_size_, peer_wnd_ ? peer_wnd_ : window_size_,
-			congestion_.get_cwnd(), SACK_BITS);
+			window_size_, peer_wnd_, congestion_.get_cwnd(), SACK_BITS);
 
 		while (window_.get_next_seq() <= window_.total_segments() &&
 			   window_.get_next_seq() < window_.get_base_seq() + window_cap) {
@@ -523,7 +660,7 @@ namespace rtp {
 			try_send_data();
 			process_network();
 			handle_timeouts();
-
+			handle_window_probe();
 			if (!data_timing_recorded_ && window_.all_acked()) {
 				if (stats_.get_start_time() == 0) {
 					stats_.set_start_time(now_ms());

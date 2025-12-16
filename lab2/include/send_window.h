@@ -23,6 +23,8 @@ namespace rtp {
 			uint64_t last_send{0};		 // 最后发送时间（用于超时检测）
 			uint64_t last_sack_retx{0};	 // 最后SACK重传时间（避免频繁重传）
 			int retrans_count{0};		 // 重传次数（用于检测连接断开）
+			uint64_t send_timestamp{0};  // 首次发送时间戳（用于RTT测量）
+			bool is_retransmitted{false}; // 是否被重传过（Karn算法）
 		};
 
 		SendWindow();

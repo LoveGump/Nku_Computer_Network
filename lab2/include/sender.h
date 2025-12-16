@@ -46,6 +46,11 @@ namespace rtp {
 		// === 重传处理 ===
 		void handle_timeouts();
 		void fast_retransmit();
+		void update_rto(uint64_t rtt_sample);  // 更新RTO（Jacobson/Karels算法）
+
+		// === 窗口探测 ===
+		void handle_window_probe();	 // 处理窗口探测逻辑
+		void send_window_probe();	 // 发送窗口探测段
 
 		// === Socket相关 ===
 		socket_t sock_{INVALID_SOCKET_VALUE};
@@ -76,6 +81,18 @@ namespace rtp {
 
 		// === 超时检测 ===
 		uint64_t last_ack_time_{0};	 // 最后收到ACK的时间
+
+		// === 窗口探测（Window Probing / Persist Timer） ===
+		bool zero_window_{false};	 // 对端窗口是否为零
+		uint64_t persist_timer_{0};	 // 持续计时器（下次探测时间）
+		int persist_backoff_{0};	 // 指数退避级别（0~12）
+		uint32_t probe_seq_{0};		 // 窗口探测序列号
+
+		// === RTO自适应（Jacobson/Karels算法） ===
+		double srtt_{0.0};			   // 平滑RTT（毫秒）
+		double rttvar_{0.0};		   // RTT方差（毫秒）
+		int rto_{1000};				   // 当前RTO（毫秒），初始1秒
+		bool rtt_initialized_{false};  // 是否已初始化RTT
 	};
 
 }  // namespace rtp
