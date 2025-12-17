@@ -250,7 +250,22 @@ namespace rtp {
 		}
 
 		window_.set_base_seq(ack);
-		congestion_.on_new_ack();
+
+		// NewReno: 检测部分ACK并处理
+		bool is_partial_ack =
+			congestion_.on_new_ack(ack, window_.get_next_seq());
+		if (is_partial_ack) {
+			// 部分ACK：重传下一个未确认的段
+			uint32_t next_unacked = ack;
+			if (next_unacked <= window_.total_segments()) {
+				auto& seg = window_.get_segment(next_unacked);
+				if (!seg.acked) {
+					cout << "[NewReno] Retransmitting next unacked segment: "
+						 << next_unacked << std::endl;
+					transmit_segment(next_unacked);
+				}
+			}
+		}
 	}
 
 	/**
@@ -356,7 +371,7 @@ namespace rtp {
 		congestion_.on_duplicate_ack();
 
 		if (congestion_.should_fast_retransmit()) {
-			congestion_.on_fast_retransmit();
+			congestion_.on_fast_retransmit(window_.get_next_seq());
 			fast_retransmit();
 		}
 	}
