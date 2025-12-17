@@ -13,6 +13,7 @@
       src/congestion_control.cpp
       src/send_window.cpp
       src/transfer_stats.cpp
+      src/utils/logger.cpp
   )
   add_executable(receiver
       src/receiver_main.cpp
@@ -20,6 +21,7 @@
       src/rtp.cpp
       src/receive_buffer.cpp
       src/transfer_stats.cpp
+      src/utils/logger.cpp
   )
 
   if(WIN32)

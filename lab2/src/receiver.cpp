@@ -10,6 +10,7 @@ namespace rtp {
 	using std::size_t;
 	using std::string;
 	using std::vector;
+	using std::endl;
 
 	namespace {
 		// 最大握手重试次数
@@ -28,6 +29,7 @@ namespace rtp {
 		}
 	}  // namespace
 
+	// 窗口大小和SACK位图宽度保持一致
 	ReliableReceiver::ReliableReceiver(uint16_t listen_port, string output_path,
 									   uint16_t window_size)
 		: listen_port_(listen_port),
@@ -35,47 +37,61 @@ namespace rtp {
 		  window_size_(std::min<uint16_t>(window_size, SACK_WINDOW_LIMIT)),
 		  buffer_(std::min<uint16_t>(window_size, SACK_WINDOW_LIMIT)) {}
 
+	// 关闭Socket
 	ReliableReceiver::~ReliableReceiver() {
 		if (socket_valid(sock_)) {
-			close_socket(sock_);
+			closesocket(sock_);
 		}
 	}
 
 	bool ReliableReceiver::wait_for_packet(Packet& pkt, sockaddr_in& from,
 										   int timeout_ms) {
-		fd_set rfds;
-		FD_ZERO(&rfds);
-		FD_SET(sock_, &rfds);
-		timeval tv{};
+		fd_set rfds;		   // 声明读文件描述符集合
+		FD_ZERO(&rfds);		   // 清空集合
+		FD_SET(sock_, &rfds);  // 将socket加入集合
+		timeval tv{};		   // 超时结构体
 		if (timeout_ms >= 0) {
-			tv.tv_sec = timeout_ms / 1000;
-			tv.tv_usec = (timeout_ms % 1000) * 1000;
+			// 设置超时时间
+			tv.tv_sec = timeout_ms / 1000;			  // s
+			tv.tv_usec = (timeout_ms % 1000) * 1000;  // ms
 		}
-		int nfds = 0;
-		int rv = select(nfds, &rfds, nullptr, nullptr,
-						timeout_ms >= 0 ? &tv : nullptr);
+		// 等待数据可读或超时
+		// 它把 sock_ 交给内核监视可读事件，内核在有数据到达（或错误/关闭）时把 socket 标记为“可读”，select
+  		// 就返回 >0，rfds 里该 socket 仍在集合。然后才去 recvfrom 把包读出来；如果到超时时间还没有可读，select 返回 0，视为超
+ 		// 时。
+		int rv = select(0, &rfds, nullptr, nullptr,
+						timeout_ms >= 0 ? &tv : nullptr); 
 		if (rv <= 0) {
+			// 超时或出错
 			return false;
 		}
+
+		// 接收数据包
 		sockaddr_in peer{};
-		socklen_t len = sizeof(peer);
-		vector<uint8_t> buf(2048);
+		socklen_t len = sizeof(peer);  // 地址长度
+		vector<uint8_t> buf(2048);	   // 接收缓冲区
+		// 接收数据
 		int n = recvfrom(sock_, reinterpret_cast<char*>(buf.data()),
 						 static_cast<int>(buf.size()), 0,
 						 reinterpret_cast<sockaddr*>(&peer), &len);
 		if (n <= 0) {
+			// 接收失败
 			return false;
 		}
 		if (!parse_packet(buf.data(), static_cast<size_t>(n), pkt)) {
+			// 解析失败
 			return false;
 		}
+		// 返回发送方地址
 		from = peer;
 		return true;
 	}
 
 	int ReliableReceiver::send_raw(const PacketHeader& hdr,
 								   const vector<uint8_t>& payload) {
+		// 序列化并发送数据包
 		auto buffer = serialize_packet(hdr, payload);
+		// 发送到客户端地址
 		return sendto(sock_, reinterpret_cast<const char*>(buffer.data()),
 					  static_cast<int>(buffer.size()), 0,
 					  reinterpret_cast<const sockaddr*>(&client_),
@@ -126,52 +142,61 @@ namespace rtp {
 		sockaddr_in from{};
 		cout << "Waiting for SYN on port " << listen_port_ << "...\n";
 		while (true) {
+			// 等待SYN包
 			if (!wait_for_packet(pkt, from, -1)) {
 				continue;
 			}
+			// 检查是否为SYN包
 			if (!(pkt.header.flags & FLAG_SYN)) {
 				continue;
 			}
 
+			// 收到SYN，记录客户端地址和ISN
 			client_ = from;
 			peer_isn_ = pkt.header.seq;
 			cout << "[DEBUG] Received SYN from " << addr_to_string(from)
-				 << "\n";
+				 << endl;
 
-			sockaddr_in local_info{};
+			// 生成本端ISN
+			sockaddr_in local_info{}; // 本地地址信息
 			int local_len = sizeof(local_info);
 			if (getsockname(sock_, reinterpret_cast<sockaddr*>(&local_info),
 							&local_len) != 0) {
-				local_info.sin_family = AF_INET;
-				local_info.sin_addr.s_addr = htonl(INADDR_ANY);
-				local_info.sin_port = htons(listen_port_);
+
+				// 获取本地地址失败，使用通配地址
+				local_info.sin_family = AF_INET; // IPv4
+				local_info.sin_addr.s_addr = htonl(INADDR_ANY); // 任意地址
+				local_info.sin_port = htons(listen_port_); // 监听端口
 			}
+			// 生成ISN
 			isn_ = generate_isn(local_info, client_);
 
+			// 发送SYN+ACK包
 			PacketHeader syn_ack{};
-			syn_ack.seq = isn_;
-			syn_ack.ack = peer_isn_ + 1;
-			syn_ack.flags = FLAG_SYN | FLAG_ACK;
-			syn_ack.wnd = window_size_;
-			syn_ack.len = 0;
-			syn_ack.sack_mask = 0;
+			syn_ack.seq = isn_;	// 本端ISN
+			syn_ack.ack = peer_isn_ + 1; // 确认号为对端ISN+1
+			syn_ack.flags = FLAG_SYN | FLAG_ACK; // SYN和ACK标志
+			syn_ack.wnd = window_size_; // 通告接收窗口大小
+			syn_ack.len = 0; // 无负载
+			syn_ack.sack_mask = 0; // 无SACK掩码
 
-			bool acked = false;
-			for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES && !acked;
-				 ++attempt) {
-				send_raw(syn_ack, {});
+			bool acked = false; // 标记是否收到ACK
+			// 等待ACK包
+			for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES && !acked; ++attempt) {
+				send_raw(syn_ack, {}); // 发送SYN+ACK
+				// 等待ACK或数据包（隐式完成握手）
 				cout << "[DEBUG] Sent SYN+ACK (attempt " << (attempt + 1) << "/"
-					 << MAX_HANDSHAKE_RETRIES << ")\n";
+					 << MAX_HANDSHAKE_RETRIES << ")" << endl;
 
+				// 等待 ACK 包
 				Packet confirm{};
 				sockaddr_in confirm_from{};
-				if (wait_for_packet(confirm, confirm_from,
-									HANDSHAKE_TIMEOUT_MS) &&
+				if (wait_for_packet(confirm, confirm_from,HANDSHAKE_TIMEOUT_MS) &&
 					same_endpoint(confirm_from, client_)) {
 					// 收到RST段，连接被对方重置
 					if (confirm.header.flags & FLAG_RST) {
 						cerr << "[RST] Received RST during handshake, "
-								"connection reset by peer\n";
+								"connection reset by peer" << endl;
 						return false;
 					}
 					// 收到 ACK 或数据包都表示握手完成
@@ -180,9 +205,9 @@ namespace rtp {
 						cout << "[DEBUG] Received ACK, handshake completed\n";
 						acked = true;
 					} else if (confirm.header.flags & FLAG_DATA) {
+						// 隐式完成握手
 						cout << "[DEBUG] Received DATA (implicit ACK), "
-								"handshake "
-								"completed\n";
+								"handshake completed" << endl;
 						acked = true;
 					}
 				}
@@ -194,7 +219,7 @@ namespace rtp {
 				return true;
 			}
 
-			cout << "[WARN] Handshake ACK not received, waiting for new SYN\n";
+			cout << "[WARN] Handshake ACK not received, waiting for new SYN" << endl;
 			send_rst();	 // 握手失败，发送RST终止连接
 		}
 		return false;
@@ -260,7 +285,7 @@ namespace rtp {
 	 * 3. 如果超时未收到ACK，重传FIN+ACK（最多MAX_FIN_RETRIES次）
 	 */
 	void ReliableReceiver::handle_fin(uint32_t fin_seq) {
-		cout << "[DEBUG] Received FIN\n";
+		cout << "[DEBUG] Received FIN" << endl;
 		if (stats_.get_end_time() == 0) {
 			stats_.set_end_time(now_ms());
 		}
@@ -302,8 +327,11 @@ namespace rtp {
 	}
 
 	int ReliableReceiver::run() {
-		if (init_socket_lib() != 0) {
-			return 1;
+		WSADATA wsa;  // WSA 数据结构
+		// 2.2 版本
+		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+			cerr << "WSAStartup failed\n";
+			return -1;
 		}
 
 		sock_ = socket(AF_INET, SOCK_DGRAM, 0);

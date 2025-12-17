@@ -1,3 +1,4 @@
+// receiver.h
 #pragma once
 
 #include <cstdint>
@@ -26,11 +27,37 @@ namespace rtp {
 
 	   private:
 		// === 网络通信 ===
+		
+		/**
+		 * 等待接收数据包
+		 * @param pkt 输出参数，接收到的数据包
+		 * @param from 输出参数，发送方地址
+		 * @param timeout_ms 超时时间（毫秒），-1表示无限等待
+		 * @return 是否成功接收到数据包
+		 */
 		bool wait_for_packet(Packet& pkt, sockaddr_in& from, int timeout_ms);
+
+		/**
+		 * 发送原始数据包
+		 * @param hdr 包头
+		 * @param payload 负载数据
+		 * @return 发送的字节数
+		 */
 		int send_raw(const PacketHeader& hdr, const vector<uint8_t>& payload);
 
 		// === 连接管理 ===
+		/**
+		 * 执行三次握手（被动方）
+		 * 流程：等待SYN -> 发送SYN+ACK -> 等待ACK
+		 * 返回true表示握手成功
+		 * 注：如果收到数据包，认为握手隐式完成
+		 */
 		bool do_handshake();
+
+		/**
+		 * 处理FIN包（连接关闭）
+		 * 1. 发送FIN+ACK
+		 */
 		void handle_fin(uint32_t fin_seq);
 
 		// === ACK发送 ===

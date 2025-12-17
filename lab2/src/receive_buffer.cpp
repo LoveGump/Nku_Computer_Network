@@ -8,7 +8,7 @@ namespace rtp {
         : expected_seq_(0), window_size_(window_size) {}
 
     bool ReceiveBuffer::add_segment(uint32_t seq, const vector<uint8_t>& data) {
-        // 检查是否已存在（重复）
+        // 检查是否已存在
         if (buffer_.find(seq) != buffer_.end()) {
             return false;
         }
@@ -27,7 +27,9 @@ namespace rtp {
                 break;  // 遇到缺口，停止提取
             }
 
+            // 提取该段数据
             result.push_back(std::move(it->second));
+            // 从缓冲区移除该段
             buffer_.erase(it);
             expected_seq_++;  // 推进期望序号
         }
@@ -49,10 +51,6 @@ namespace rtp {
 
     bool ReceiveBuffer::is_in_window(uint32_t seq) const {
         return seq >= expected_seq_ && seq < expected_seq_ + window_size_;
-    }
-
-    bool ReceiveBuffer::is_duplicate(uint32_t seq) const {
-        return seq < expected_seq_ || buffer_.find(seq) != buffer_.end();
     }
 
 }  // namespace rtp

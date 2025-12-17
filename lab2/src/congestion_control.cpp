@@ -1,3 +1,5 @@
+// congestion_control.cpp
+// 拥塞控制算法实现（TCP NewReno）
 #include "congestion_control.h"
 
 #include <iostream>
@@ -13,27 +15,25 @@ namespace rtp {
 		  recover_seq_(0) {}
 
 	bool CongestionControl::on_new_ack(uint32_t ack_seq, uint32_t next_seq) {
-		// 收到新ACK，推进窗口
+
 		dup_ack_count_ = 0;
-		bool is_partial_ack = false;
+		bool is_partial_ack = false; // 标记是否为部分ACK
 
 		// NewReno: 如果处于快速恢复，检查是部分ACK还是完整ACK
 		if (in_fast_recovery_) {
+			// 如果处于快速恢复，检查ACK类型
 			if (ack_seq < recover_seq_) {
-				// 部分ACK：只确认了部分数据，说明后面还有丢包
-				// 收缩cwnd（抵消之前的膨胀），重传下一个段
-				cwnd_ = std::max(cwnd_ - 1.0, ssthresh_);
+				// 部分ACK：只确认了部分数据，说明后面还有丢包继续重传下一个段
 				is_partial_ack = true;
-				cout << "[NewReno] Partial ACK detected (ack=" << ack_seq
+				cout << "[NewReno] PACK detected (ack=" << ack_seq
 					 << ", recover=" << recover_seq_ << "), cwnd=" << cwnd_
 					 << endl;
 			} else {
 				// 完整ACK：所有数据都确认了，退出快速恢复
-				cwnd_ = ssthresh_;
+				cwnd_ = ssthresh_;	// 设置cwnd为ssthresh
 				in_fast_recovery_ = false;
 				cout << "[NewReno] Full ACK received, exiting fast recovery "
-						"(cwnd="
-					 << cwnd_ << ")" << endl;
+						"(cwnd="<< cwnd_ << ")" << endl;
 			}
 		}
 
@@ -58,7 +58,7 @@ namespace rtp {
 		// 如果已经在快速恢复中，继续膨胀窗口
 		// 每个重复ACK代表一个离开网络的数据包，可以发送新包
 		if (in_fast_recovery_) {
-			cwnd_ += 1.0;
+			cwnd_ += 1.0;	// 增加cwnd以允许发送新数据
 		}
 	}
 
@@ -71,10 +71,10 @@ namespace rtp {
 				"(cwnd: "
 			 << cwnd_ << " -> " << (cwnd_ / 2.0 + 3.0) << ")" << endl;
 
-		ssthresh_ = std::max(2.0, cwnd_ / 2.0);
+		ssthresh_ = std::max(4.0, cwnd_ / 2.0);	// 最小为4
 		cwnd_ = ssthresh_ + 3.0;
 		in_fast_recovery_ = true;
-		recover_seq_ = next_seq;  // NewReno: 记录进入快速恢复时的最高序列号
+		recover_seq_ = next_seq;  // 记录进入快速恢复时的最高序列号
 	}
 
 	void CongestionControl::on_timeout() {
@@ -82,16 +82,10 @@ namespace rtp {
 			 << " -> 1.0, ssthresh: " << ssthresh_ << " -> " << (cwnd_ / 2.0)
 			 << ")" << endl;
 
-		ssthresh_ = std::max(2.0, cwnd_ / 2.0);
+		ssthresh_ = std::max(4.0, cwnd_ / 2.0);
 		cwnd_ = 1.0;
 		dup_ack_count_ = 0;
 		in_fast_recovery_ = false;
 		recover_seq_ = 0;
 	}
-
-	void CongestionControl::exit_fast_recovery() {
-		cwnd_ = ssthresh_;
-		in_fast_recovery_ = false;
-	}
-
 }  // namespace rtp

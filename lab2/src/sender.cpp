@@ -54,7 +54,7 @@ namespace rtp {
 
 	ReliableSender::~ReliableSender() {
 		if (socket_valid(sock_)) {
-			close_socket(sock_);
+			closesocket(sock_);
 		}
 	}
 
@@ -593,8 +593,11 @@ namespace rtp {
 	}
 
 	int ReliableSender::run() {
-		if (init_socket_lib() != 0) {
-			return 1;
+		WSADATA wsa;  // WSA 数据结构
+		// 2.2 版本
+		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+			cerr << "WSAStartup failed\n";
+			return -1;
 		}
 
 		sock_ = socket(AF_INET, SOCK_DGRAM, 0);

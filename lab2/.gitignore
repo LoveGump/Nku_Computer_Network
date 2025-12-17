@@ -6,3 +6,4 @@ clumsy/
 *.bat
 AGENTS.md
 PROTOCOL_DESIGN.md
+*.log

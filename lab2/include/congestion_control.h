@@ -11,16 +11,16 @@ namespace rtp {
 	 */
 	class CongestionControl {
 	   public:
-		explicit CongestionControl(double initial_ssthresh = 16.0);
+		explicit CongestionControl(double initial_ssthresh = 64.0);
 
-		// 收到新ACK时调用（推进窗口）
+		// 收到新ACK时调用
 		// 根据当前状态执行慢启动或拥塞避免算法
-		// NewReno: 返回true表示检测到部分ACK，需要重传下一个段
-		// 参数: ack_seq = 收到的ACK序列号, next_seq = 当前最高发送序列号
+		// 返回true表示检测到部分ACK，需要重传下一个段
+		// 参数: ack_seq = 收到的ACK序列号, next_seq = 最高待发送序号
 		bool on_new_ack(uint32_t ack_seq, uint32_t next_seq);
 
-		// 收到重复ACK时调用
-		// 如果在快速恢复中，则线性增加cwnd
+		// 收到dupACK时调用
+		// 如果在快速恢复中，则线性增加cwnd，发送新的数据
 		void on_duplicate_ack();
 
 		// 检测到3个重复ACK，触发快速重传
@@ -29,16 +29,12 @@ namespace rtp {
 
 		// 执行快速重传后的处理
 		// ssthresh = cwnd/2, cwnd = ssthresh + 3, 进入快速恢复
-		// NewReno: 记录recover_seq用于部分ACK检测
+		// 记录recover_seq用于部分ACK检测
 		void on_fast_retransmit(uint32_t next_seq);
 
 		// 超时事件处理
 		// ssthresh = cwnd/2, cwnd = 1, 退出快速恢复
 		void on_timeout();
-
-		// 退出快速恢复
-		// 设置cwnd = ssthresh
-		void exit_fast_recovery();
 
 		// 获取当前拥塞窗口大小
 		double get_cwnd() const { return cwnd_; }
@@ -56,7 +52,7 @@ namespace rtp {
 		void reset_dup_ack_count() { dup_ack_count_ = 0; }
 
 	   private:
-		double cwnd_;			  // 拥塞窗口（段数）
+		double cwnd_;			  // 拥塞窗口
 		double ssthresh_;		  // 慢启动阈值
 		uint32_t dup_ack_count_;  // 重复ACK计数
 		bool in_fast_recovery_;	  // 是否处于快速恢复状态

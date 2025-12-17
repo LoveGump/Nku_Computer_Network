@@ -43,7 +43,7 @@
 ## 构建
 推荐 CMake（C++17）：
 ```bash
-cmake -S . -B build
+cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SH="CMAKE_SH-NOTFOUND"
 cmake --build build --config Release
 ```
 生成：`build/Release/sender(.exe)`、`build/Release/receiver(.exe)`（单配置生成器则在 `build/` 下）。
