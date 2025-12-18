@@ -10,24 +10,23 @@
 namespace rtp {
 	using std::size_t;
 	using std::vector;
-	
+
 	/**
 	 * 发送窗口管理
 	 * 负责维护所有数据段的状态、滑动窗口的边界和发送逻辑
 	 */
 	class SendWindow {
-
 	   public:
 		// 数据段信息
 		struct SegmentInfo {
-			vector<uint8_t> data;		 // 段数据
-			bool sent{false};			 // 是否已发送
-			bool acked{false};			 // 是否已确认
-			uint64_t last_send{0};		 // 最后发送时间（用于超时检测）
-			uint64_t last_sack_retx{0};	 // 最后SACK重传时间（避免频繁重传）
-			int retrans_count{0};		 // 重传次数（用于检测连接断开）
-			uint64_t send_timestamp{0};  // 首次发送时间戳（用于RTT测量）
-			bool is_retransmitted{false}; // 是否被重传过（Karn算法）
+			vector<uint8_t> data;		   // 段数据
+			bool sent{false};			   // 是否已发送
+			bool acked{false};			   // 是否已确认
+			uint64_t last_send{0};		   // 最后发送时间（用于超时检测）
+			uint64_t last_sack_retx{0};	   // 最后SACK重传时间（避免频繁重传）
+			int retrans_count{0};		   // 重传次数（用于检测连接断开）
+			uint64_t send_timestamp{0};	   // 首次发送时间戳（用于RTT测量）
+			bool is_retransmitted{false};  // 是否被重传过（Karn算法）
 		};
 		SendWindow();
 
@@ -63,15 +62,13 @@ namespace rtp {
 
 		// 计算实际窗口大小 取本地窗口、对端窗口、拥塞窗口、SACK位宽的最小值
 		// 事实上，本地窗口和对端窗口均为 32 ，位宽也是 32
-		size_t calculate_window_size(uint16_t local_window,
-									 uint16_t peer_window, double cwnd,
-									 size_t sack_bits) const;
+		size_t calculate_window_size(uint16_t local_window, uint16_t peer_window, double cwnd, size_t sack_bits) const;
 
 	   private:
-		vector<SegmentInfo> segments_; // 所有数据段
-		uint32_t total_segments_;	// 总段数
-		uint32_t base_seq_;	 // 窗口左边界（最小未确认序号）
-		uint32_t next_seq_;	 // 下一个待发送序号
+		vector<SegmentInfo> segments_;	// 所有数据段
+		uint32_t total_segments_;		// 总段数
+		uint32_t base_seq_;				// 窗口左边界（最小未确认序号）
+		uint32_t next_seq_;				// 下一个待发送序号
 	};
 
 }  // namespace rtp

@@ -12,9 +12,7 @@ namespace rtp {
 	class TeeBuf : public std::streambuf {
 	   public:
 		TeeBuf() = default;
-		TeeBuf(std::streambuf* file_buf, std::streambuf* console_buf) {
-			reset(file_buf, console_buf);
-		}
+		TeeBuf(std::streambuf* file_buf, std::streambuf* console_buf) { reset(file_buf, console_buf); }
 
 		void reset(std::streambuf* file_buf, std::streambuf* console_buf) {
 			file_buf_ = file_buf;
@@ -27,11 +25,8 @@ namespace rtp {
 				return traits_type::not_eof(ch);
 			}
 			int r1 = file_buf_ ? file_buf_->sputc(static_cast<char>(ch)) : ch;
-			int r2 =
-				console_buf_ ? console_buf_->sputc(static_cast<char>(ch)) : ch;
-			return (r1 == traits_type::eof() || r2 == traits_type::eof())
-					   ? traits_type::eof()
-					   : ch;
+			int r2 = console_buf_ ? console_buf_->sputc(static_cast<char>(ch)) : ch;
+			return (r1 == traits_type::eof() || r2 == traits_type::eof()) ? traits_type::eof() : ch;
 		}
 
 		int sync() override {

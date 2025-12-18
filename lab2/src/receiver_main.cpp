@@ -7,14 +7,14 @@ using namespace rtp;
 using namespace std;
 
 static void usage(const char* prog) {
-	cout << "Usage: " << prog << " <listen_port> <output_file> <window_size>\n";
+	cout << "Usage: " << prog << " <listen_port> <output_file> <window_size>" << endl;
 }
 
 int main(int argc, char** argv) {
 	try {
-		rtp::Logger::instance().init("logs/receiver.log", false);
+		Logger::instance().init("logs/receiver.log", false);
 	} catch (const std::exception& ex) {
-		std::cerr << "Logger init failed: " << ex.what() << "\n";
+		cerr << "Logger init failed: " << ex.what() << endl;
 	}
 
 	if (argc < 4) {

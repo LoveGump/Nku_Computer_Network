@@ -9,16 +9,18 @@ using namespace std;
 static void usage(const char* prog) {
 	cout << "Usage: " << prog
 		 << " <receiver_ip> <receiver_port> <input_file> <window_size> "
-			"[local_port]\n";
+			"[local_port]"
+		 << endl;
 	cout << "  local_port: Optional. Bind to specific local port (default: "
-			"auto-assign)\n";
+			"auto-assign)"
+		 << endl;
 }
 
 int main(int argc, char** argv) {
 	try {
 		rtp::Logger::instance().init("logs/sender.log", false);
 	} catch (const std::exception& ex) {
-		std::cerr << "Logger init failed: " << ex.what() << "\n";
+		std::cerr << "Logger init failed: " << ex.what() << std::endl;
 	}
 
 	if (argc < 5) {

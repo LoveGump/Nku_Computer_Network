@@ -15,32 +15,46 @@ namespace rtp {
 	// 可靠发送端
 	class ReliableSender {
 	   public:
-		ReliableSender(string dest_ip, uint16_t dest_port, string file_path,
-					   uint16_t window_size, uint16_t local_port = 0);
+		/**
+		 * @param dest_ip 目标IP地址
+		 * @param dest_port 目标端口
+		 * @param file_path 待发送文件路径
+		 * @param window_size 发送窗口大小（最大SACK位图宽度）
+		 * @param local_port 本地绑定端口（0表示随机端口）
+		 */
+		ReliableSender(string dest_ip, uint16_t dest_port, string file_path, uint16_t window_size,
+					   uint16_t local_port = 0);
 		~ReliableSender();
 
 		int run();
 
 	   private:
-		// === 网络通信 ===
+		/**
+		 * 等待接收数据包
+		 * @param pkt 输出参数，接收到的数据包
+		 * @param from 输出参数，发送方地址
+		 * @param timeout_ms 超时时间（毫秒），-1表示无限等待
+		 * @return 是否成功接收到数据包
+		 */
 		bool wait_for_packet(Packet& pkt, sockaddr_in& from, int timeout_ms);
 		int send_raw(const PacketHeader& hdr, const vector<uint8_t>& payload);
 		void send_rst();  // 发送RST段，强制终止连接
 
-		// === 连接管理 ===
-		bool handshake();
-		void try_send_fin();
-		void handle_fin_ack();
+		bool handshake();		// 执行三次握手建立连接
+		void try_send_fin();	// 尝试发送FIN段
+		void handle_fin_ack();	// 处理收到的FIN确认
 
-		// === 数据传输 ===
 		void transmit_segment(uint32_t seq);
 		void try_send_data();
 		void process_network();
 
-		// === ACK处理 ===
+		//   处理ACK相关
 		void handle_ack(const Packet& pkt);
+		// 处理新ACK，推进窗口
 		void handle_new_ack(uint32_t ack);
+		// 处理重复ACK，可能触发快速重传
 		void handle_duplicate_ack(uint32_t ack);
+		// 处理SACK掩码，重传缺失段
 		void handle_sack(uint32_t ack, uint32_t mask);
 
 		// === 重传处理 ===
@@ -73,10 +87,10 @@ namespace rtp {
 		TransferStats stats_;			// 统计信息
 
 		// === FIN状态 ===
-		bool fin_sent_{false};
-		bool fin_complete_{false};
-		uint64_t fin_last_send_{0};
-		int fin_retry_count_{0};
+		bool fin_sent_{false};		 // 是否已发送FIN
+		bool fin_complete_{false};	 // FIN是否完成
+		uint64_t fin_last_send_{0};	 // 上次发送FIN的时间
+		int fin_retry_count_{0};	 // FIN重传计数
 		bool data_timing_recorded_{false};
 
 		// === 超时检测 ===

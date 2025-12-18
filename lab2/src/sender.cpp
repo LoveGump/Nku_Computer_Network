@@ -8,6 +8,7 @@
 namespace rtp {
 	using std::cerr;
 	using std::cout;
+	using std::endl;
 	using std::ifstream;
 	using std::size_t;
 	using std::string;
@@ -31,20 +32,17 @@ namespace rtp {
 
 		// 检查两个地址是否相同
 		bool same_endpoint(const sockaddr_in& a, const sockaddr_in& b) {
-			return a.sin_addr.s_addr == b.sin_addr.s_addr &&
-				   a.sin_port == b.sin_port;
+			return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
 		}
 	}  // namespace
 
-	ReliableSender::ReliableSender(string dest_ip, uint16_t dest_port,
-								   string file_path, uint16_t window_size,
+	ReliableSender::ReliableSender(string dest_ip, uint16_t dest_port, string file_path, uint16_t window_size,
 								   uint16_t local_port)
 		: dest_ip_(std::move(dest_ip)),
 		  dest_port_(dest_port),
 		  local_port_(local_port),
 		  file_path_(std::move(file_path)),
-		  window_size_(std::min<uint16_t>(window_size,
-										  static_cast<uint16_t>(SACK_BITS))),
+		  window_size_(std::min<uint16_t>(window_size, static_cast<uint16_t>(SACK_BITS))),
 		  peer_wnd_(0),
 		  isn_(0),
 		  peer_isn_(0) {
@@ -58,45 +56,44 @@ namespace rtp {
 		}
 	}
 
-	bool ReliableSender::wait_for_packet(Packet& pkt, sockaddr_in& from,
-										 int timeout_ms) {
-		fd_set rfds;
+	bool ReliableSender::wait_for_packet(Packet& pkt, sockaddr_in& from, int timeout_ms) {
+		fd_set rfds;  // 声明读文件描述符集合
 		FD_ZERO(&rfds);
 		FD_SET(sock_, &rfds);
-		timeval tv{};
+		timeval tv{};  // 超时结构体
 		if (timeout_ms >= 0) {
 			tv.tv_sec = timeout_ms / 1000;
 			tv.tv_usec = (timeout_ms % 1000) * 1000;
 		}
-		int nfds = 0;
-		int rv = select(nfds, &rfds, nullptr, nullptr,
-						timeout_ms >= 0 ? &tv : nullptr);
+		// 等待数据可读或超时
+		int rv = select(0, &rfds, nullptr, nullptr, timeout_ms >= 0 ? &tv : nullptr);
 		if (rv <= 0) {
+			// 超时或出错
 			return false;
 		}
-		sockaddr_in peer{};
+		sockaddr_in peer{};	 // 发送方地址
 		socklen_t len = sizeof(peer);
 		vector<uint8_t> buf(2048);
-		int n = recvfrom(sock_, reinterpret_cast<char*>(buf.data()),
-						 static_cast<int>(buf.size()), 0,
+		int n = recvfrom(sock_, reinterpret_cast<char*>(buf.data()), static_cast<int>(buf.size()), 0,
 						 reinterpret_cast<sockaddr*>(&peer), &len);
 		if (n <= 0) {
+			// 接收失败
 			return false;
 		}
+		// 解析数据包
 		if (!parse_packet(buf.data(), static_cast<size_t>(n), pkt)) {
 			return false;
 		}
+		// 返回发送方地址
 		from = peer;
 		return true;
 	}
 
-	int ReliableSender::send_raw(const PacketHeader& hdr,
-								 const vector<uint8_t>& payload) {
+	int ReliableSender::send_raw(const PacketHeader& hdr, const vector<uint8_t>& payload) {
+		// 序列化并发送数据包
 		auto buffer = serialize_packet(hdr, payload);
-		return sendto(sock_, reinterpret_cast<const char*>(buffer.data()),
-					  static_cast<int>(buffer.size()), 0,
-					  reinterpret_cast<const sockaddr*>(&remote_),
-					  sizeof(remote_));
+		return sendto(sock_, reinterpret_cast<const char*>(buffer.data()), static_cast<int>(buffer.size()), 0,
+					  reinterpret_cast<const sockaddr*>(&remote_), sizeof(remote_));
 	}
 
 	/**
@@ -104,6 +101,7 @@ namespace rtp {
 	 * 用于握手失败、校验错误、状态异常等场景
 	 */
 	void ReliableSender::send_rst() {
+		// 构造RST包
 		PacketHeader rst{};
 		rst.seq = isn_ + 1;
 		rst.ack = peer_isn_ + 1;
@@ -111,8 +109,9 @@ namespace rtp {
 		rst.wnd = 0;
 		rst.len = 0;
 		rst.sack_mask = 0;
+		// 发送RST包
 		send_raw(rst, {});
-		cout << "[RST] Sent RST segment to reset connection\n";
+		cout << "[RST] Sent RST segment to reset connection" << endl;
 	}
 
 	/**
@@ -121,6 +120,7 @@ namespace rtp {
 	 * 返回true表示握手成功
 	 */
 	bool ReliableSender::handshake() {
+		// 构建syn包
 		PacketHeader syn{};
 		syn.seq = isn_;
 		syn.ack = 0;
@@ -129,36 +129,34 @@ namespace rtp {
 		syn.flags = FLAG_SYN;
 		syn.sack_mask = 0;
 
-		cout << "[DEBUG] Starting handshake with " << dest_ip_ << ":"
-			 << dest_port_ << "\n";
+		// 开始握手
+		cout << "[DEBUG] Starting handshake with " << dest_ip_ << ":" << dest_port_ << endl;
 		for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES; ++attempt) {
-			cout << "[DEBUG] Sending SYN (attempt " << (attempt + 1) << "/"
-				 << MAX_HANDSHAKE_RETRIES << ")\n";
-			send_raw(syn, {});
+			cout << "[DEBUG] Sending SYN (attempt " << (attempt + 1) << "/" << MAX_HANDSHAKE_RETRIES << ")" << endl;
+			send_raw(syn, {});	// 发送SYN包
 			Packet pkt{};
 			sockaddr_in from{};
 			if (!wait_for_packet(pkt, from, HANDSHAKE_TIMEOUT_MS)) {
+				// 超时重试
 				continue;
 			}
 			if (!same_endpoint(from, remote_)) {
-				cout << "[DEBUG] Ignoring handshake response from unexpected "
-						"peer\n";
+				// 忽略来自非预期对端的握手响应
+				cout << "[DEBUG] Ignoring handshake response from unexpected peer" << endl;
 				continue;
 			}
 			// 收到RST段，连接被对方重置
 			if (pkt.header.flags & FLAG_RST) {
-				cerr << "[RST] Received RST during handshake, connection reset "
-						"by peer\n";
+				cerr << "[RST] Received RST during handshake, connection reset by peer" << endl;
 				return false;
 			}
-			if ((pkt.header.flags & FLAG_SYN) &&
-				(pkt.header.flags & FLAG_ACK) &&
-				pkt.header.ack == syn.seq + 1) {
+			// 收到SYN+ACK段，发送ACK完成握手
+			if ((pkt.header.flags & FLAG_SYN) && (pkt.header.flags & FLAG_ACK) && pkt.header.ack == syn.seq + 1) {
+				// 记录对端ISN和窗口大小
 				peer_isn_ = pkt.header.seq;
-				peer_wnd_ = std::min<uint16_t>(
-					pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
-				cout << "[DEBUG] Received SYN+ACK, peer window size: "
-					 << peer_wnd_ << "\n";
+				peer_wnd_ = std::min<uint16_t>(pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
+				cout << "[DEBUG] Received SYN+ACK, peer window size: " << peer_wnd_ << endl;
+				// 发送ACK包完成握手
 				PacketHeader ack{};
 				ack.seq = isn_ + 1;
 				ack.ack = peer_isn_ + 1;
@@ -167,36 +165,36 @@ namespace rtp {
 				ack.len = 0;
 				ack.sack_mask = 0;
 				send_raw(ack, {});
-				cout << "[DEBUG] Handshake completed successfully\n";
+				cout << "[DEBUG] Handshake completed successfully" << endl;
 				return true;
 			}
 		}
-		cerr << "[WARN] Handshake failed after retries\n";
-		send_rst();	 // 握手失败，发送RST终止连接
+		// 握手失败
+		cerr << "[WARN] Handshake failed after retries" << endl;
+		send_rst();	 // 发送RST终止连接
 		return false;
 	}
 
 	/**
 	 * 发送或重传指定序号的数据段
-	 * seq: 段序号（相对序号，从1开始）
+	 * @param seq 段序号（相对序号，从1开始）
 	 * 如果是重传，会记录统计信息
 	 */
 	void ReliableSender::transmit_segment(uint32_t seq) {
+		// 获取段信息
 		auto& seg = window_.get_segment(seq);
-		bool is_retransmit = seg.sent;
+		bool is_retransmit = seg.sent;	// 已发送过则为重传
 
 		// 检查重传次数，超过限制认为连接失败
 		if (is_retransmit) {
 			seg.retrans_count++;
 			seg.is_retransmitted = true;  // 标记为重传（Karn算法）
 			if (seg.retrans_count > MAX_RETRANSMITS) {
-				cerr << "[ERROR] Segment " << seq
-					 << " exceeded max retransmits (" << MAX_RETRANSMITS
-					 << "), connection lost\n";
-				send_rst();
-				throw std::runtime_error(
-					"Connection lost: max retransmits "
-					"exceeded");
+				// 超过最大重传次数，连接断开
+				cerr << "[ERROR] Segment " << seq << " exceeded max retransmits (" << MAX_RETRANSMITS
+					 << "), connection lost" << endl;
+				send_rst();	 // 发送RST终止连接
+				throw std::runtime_error("Connection lost: max retransmits exceeded");
 			}
 		} else {
 			// 首次发送，记录时间戳用于RTT测量
@@ -204,6 +202,7 @@ namespace rtp {
 			seg.is_retransmitted = false;
 		}
 
+		// 构造数据包头
 		PacketHeader hdr{};
 		hdr.seq = isn_ + seq;
 		hdr.ack = 0;
@@ -212,14 +211,17 @@ namespace rtp {
 		hdr.len = static_cast<uint16_t>(seg.data.size());
 		hdr.sack_mask = 0;
 
+		// 记录传输开始时间
 		if (stats_.get_start_time() == 0) {
 			stats_.set_start_time(now_ms());
 		}
 
+		// 发送数据包
 		send_raw(hdr, seg.data);
 		seg.sent = true;
 		seg.last_send = now_ms();
 
+		// 记录重传统计
 		if (is_retransmit) {
 			stats_.record_retransmit();
 		}
@@ -232,36 +234,34 @@ namespace rtp {
 	 */
 	void ReliableSender::handle_new_ack(uint32_t ack) {
 		// 测量RTT（Karn算法：只测量未重传的段）
-		for (uint32_t i = window_.get_base_seq();
-			 i < ack && i <= window_.total_segments(); ++i) {
+		for (uint32_t i = window_.get_base_seq(); i < ack && i <= window_.total_segments(); ++i) {
+			// 找到第一个未重传且已发送的段
 			auto& seg = window_.get_segment(i);
-			if (!seg.acked && seg.sent && !seg.is_retransmitted &&
-				seg.send_timestamp > 0) {
+			if (!seg.acked && seg.sent && !seg.is_retransmitted && seg.send_timestamp > 0) {
+				// 计算RTT样本
 				uint64_t rtt_sample = now_ms() - seg.send_timestamp;
-				update_rto(rtt_sample);
+				update_rto(rtt_sample);	 // 更新RTO
+				// 只使用第一个符合条件的段进行RTT测量
 				break;	// 只测量一个RTT样本
 			}
 		}
 
 		// 标记所有被确认的段
-		for (uint32_t s = window_.get_base_seq();
-			 s < ack && s <= window_.total_segments(); ++s) {
+		for (uint32_t s = window_.get_base_seq(); s < ack && s <= window_.total_segments(); ++s) {
 			window_.mark_acked(s);
 		}
 
 		window_.set_base_seq(ack);
 
 		// NewReno: 检测部分ACK并处理
-		bool is_partial_ack =
-			congestion_.on_new_ack(ack, window_.get_next_seq());
+		bool is_partial_ack = congestion_.on_new_ack(ack, window_.get_next_seq());
 		if (is_partial_ack) {
 			// 部分ACK：重传下一个未确认的段
 			uint32_t next_unacked = ack;
 			if (next_unacked <= window_.total_segments()) {
 				auto& seg = window_.get_segment(next_unacked);
 				if (!seg.acked) {
-					cout << "[NewReno] Retransmitting next unacked segment: "
-						 << next_unacked << std::endl;
+					cout << "[NewReno] Retransmitting next unacked segment: " << next_unacked << endl;
 					transmit_segment(next_unacked);
 				}
 			}
@@ -297,8 +297,7 @@ namespace rtp {
 		vector<uint8_t> empty_payload;
 		send_raw(hdr, empty_payload);
 		probe_seq_ = hdr.seq;
-		cout << "[探测] 发送窗口探测包 seq=" << hdr.seq
-			 << " backoff=" << persist_backoff_ << std::endl;
+		cout << "[探测] 发送窗口探测包 seq=" << hdr.seq << " backoff=" << persist_backoff_ << endl;
 	}
 
 	/**
@@ -355,11 +354,9 @@ namespace rtp {
 
 		// 只在RTO值改变时打印日志
 		if (rto_ != old_rto) {
-			cout << "[RTO] RTT=" << rtt_sample
-				 << "ms, SRTT=" << static_cast<int>(srtt_)
-				 << "ms, RTTVAR=" << static_cast<int>(rttvar_)
-				 << "ms, RTO=" << rto_ << "ms (changed from " << old_rto
-				 << "ms)\n";
+			cout << "[RTO] RTT=" << rtt_sample << "ms, SRTT=" << static_cast<int>(srtt_)
+				 << "ms, RTTVAR=" << static_cast<int>(rttvar_) << "ms, RTO=" << rto_ << "ms (changed from " << old_rto
+				 << "ms)" << endl;
 		}
 	}
 
@@ -378,14 +375,15 @@ namespace rtp {
 
 	/**
 	 * 处理选择性确认（SACK）
-	 * ack: 累积确认序号
-	 * mask: SACK掩码，标记ack之后32个段的到达情况
+	 * @param ack 累积确认序号
+	 * @param mask SACK掩码，标记ack之后32个段的到达情况
 	 * 根据掩码标记已到达的段，并重传缺口段
 	 */
 	void ReliableSender::handle_sack(uint32_t ack, uint32_t mask) {
 		// 标记SACK确认的段
 		for (size_t i = 0; i < SACK_BITS; ++i) {
 			if (mask & (1u << i)) {
+				// 标记已确认的段
 				window_.mark_acked(ack + 1 + static_cast<uint32_t>(i));
 			}
 		}
@@ -394,21 +392,23 @@ namespace rtp {
 		int gap_retx_count = 0;
 		uint64_t now = now_ms();
 		for (size_t i = 0; i < SACK_BITS; ++i) {
+			// 检测缺口段
 			uint32_t seq = ack + 1 + static_cast<uint32_t>(i);
 			if (seq > window_.total_segments()) {
+				// 超出总段数，停止检查
 				break;
 			}
+			// 获取段信息
 			auto& seg = window_.get_segment(seq);
 			if (seg.sent && !seg.acked && !(mask & (1u << i))) {
 				// 该段已发送但未确认，且不在SACK中 -> 缺口
-				uint64_t last_gap =
-					seg.last_sack_retx ? seg.last_sack_retx : seg.last_send;
-				if (gap_retx_count < MAX_SACK_RETX_PER_ACK &&
-					now >= last_gap + MIN_GAP_RETX_INTERVAL_MS) {
+				uint64_t last_gap = seg.last_sack_retx ? seg.last_sack_retx : seg.last_send;  // 上次发送时间
+				if (gap_retx_count < MAX_SACK_RETX_PER_ACK && now >= last_gap + MIN_GAP_RETX_INTERVAL_MS) {
 					// 限速重传：避免频繁重传同一个段
 					seg.last_sack_retx = now;
 					++gap_retx_count;
-					cout << "[RETRANSMIT] SACK gap seq=" << seq << "\n";
+					cout << "[RETRANSMIT] SACK gap seq=" << seq << endl;
+					// 重传缺口段
 					transmit_segment(seq);
 				}
 			}
@@ -420,8 +420,7 @@ namespace rtp {
 		last_ack_time_ = now_ms();
 
 		// 获取接收方窗口大小
-		uint16_t new_peer_wnd = std::min<uint16_t>(
-			pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
+		uint16_t new_peer_wnd = std::min<uint16_t>(pkt.header.wnd, static_cast<uint16_t>(SACK_BITS));
 
 		// 检测零窗口状态，启动/停止持续计时器
 		if (new_peer_wnd == 0 && !zero_window_) {
@@ -429,28 +428,34 @@ namespace rtp {
 			zero_window_ = true;
 			persist_backoff_ = 0;
 			persist_timer_ = now_ms() + 5000;  // 首次探测：5秒
-			cout << "[窗口] 对端窗口为零，启动持续计时器" << std::endl;
+			cout << "[windows]: zero window, start persist timer" << endl;
 		} else if (new_peer_wnd > 0 && zero_window_) {
 			// 离开零窗口状态
 			zero_window_ = false;
 			persist_backoff_ = 0;
-			cout << "[窗口] 对端窗口恢复：" << new_peer_wnd << std::endl;
+			cout << "[windows]: reopen " << new_peer_wnd << endl;
 		}
 
+		// 更新对端窗口大小
 		peer_wnd_ = new_peer_wnd;
 
-		uint32_t ack_abs = pkt.header.ack;
+		// 处理ACK
+		uint32_t ack_abs = pkt.header.ack;	// 对端的绝对确认序号
 		if (ack_abs <= isn_) {
+			// 无效ACK，忽略
 			return;
 		}
+		// 转换为相对序号
 		uint32_t ack = ack_abs - isn_;
 		if (ack > window_.get_base_seq()) {
+			// 新ACK，推进窗口
 			handle_new_ack(ack);
-		} else if (ack == window_.get_base_seq() &&
-				   window_.get_base_seq() <= window_.total_segments()) {
+		} else if (ack == window_.get_base_seq() && window_.get_base_seq() <= window_.total_segments()) {
+			// 重复ACK，处理快速重传
 			handle_duplicate_ack(ack);
 		}
 
+		// 处理SACK掩码
 		handle_sack(ack, pkt.header.sack_mask);
 		window_.advance_base_seq();
 	}
@@ -462,29 +467,28 @@ namespace rtp {
 	 */
 	void ReliableSender::handle_timeouts() {
 		uint64_t now = now_ms();
-		for (uint32_t i = window_.get_base_seq(); i <= window_.total_segments();
-			 ++i) {
+		for (uint32_t i = window_.get_base_seq(); i <= window_.total_segments(); ++i) {
 			auto& seg = window_.get_segment(i);
 			// 使用动态RTO代替固定超时值
-			if (!seg.acked && seg.sent &&
-				now - seg.last_send > static_cast<uint64_t>(rto_)) {
+			if (!seg.acked && seg.sent && now - seg.last_send > static_cast<uint64_t>(rto_)) {
+				// 段超时，触发重传
 				stats_.record_timeout();
-				cout << "[TIMEOUT] Packet seq=" << i << " timed out after "
-					 << (now - seg.last_send) << "ms (RTO=" << rto_
-					 << "ms), retransmitting\n";
+				cout << "[TIMEOUT] Packet seq=" << i << " timed out after " << (now - seg.last_send)
+					 << "ms (RTO=" << rto_ << "ms), retransmitting" << endl;
 				congestion_.on_timeout();
 				// 超时后倍增RTO（Karn算法）
-				rto_ = std::min(rto_ * 2, 60000);
+				rto_ = std::min(rto_ * 2, 60000);  // 最大RTO 60s
 				transmit_segment(i);
 			}
 		}
 	}
 
+	// 快速重传窗口基序号的数据段
 	void ReliableSender::fast_retransmit() {
 		if (window_.get_base_seq() <= window_.total_segments()) {
+			// 记录快速重传统计
 			stats_.record_fast_retransmit();
-			cout << "[RETRANSMIT] Fast retransmit seq="
-				 << window_.get_base_seq() << "\n";
+			cout << "[RETRANSMIT] Fast retransmit seq=" << window_.get_base_seq() << endl;
 			transmit_segment(window_.get_base_seq());
 		}
 	}
@@ -501,8 +505,7 @@ namespace rtp {
 		}
 
 		// 计算实际窗口大小 = min(本地窗口, 对端窗口, floor(cwnd), SACK位宽)
-		size_t window_cap = window_.calculate_window_size(
-			window_size_, peer_wnd_, congestion_.get_cwnd(), SACK_BITS);
+		size_t window_cap = window_.calculate_window_size(window_size_, peer_wnd_, congestion_.get_cwnd(), SACK_BITS);
 
 		while (window_.get_next_seq() <= window_.total_segments() &&
 			   window_.get_next_seq() < window_.get_base_seq() + window_cap) {
@@ -522,14 +525,17 @@ namespace rtp {
 	 * 支持超时重传，最多MAX_FIN_RETRIES次
 	 */
 	void ReliableSender::try_send_fin() {
-		uint64_t now = now_ms();
+		uint64_t now = now_ms();  // 获取当前时间
 		if (fin_complete_) {
+			// 连接已完成，无需发送FIN
 			return;
 		}
 		if (!fin_sent_) {
 			if (!window_.all_acked()) {
+				// 还有未确认的数据段，不能发送FIN
 				return;
 			}
+			// 发送FIN包
 			PacketHeader fin{};
 			fin.seq = isn_ + window_.total_segments() + 1;
 			fin.ack = 0;
@@ -538,14 +544,16 @@ namespace rtp {
 			fin.len = 0;
 			fin.sack_mask = 0;
 			send_raw(fin, {});
+			// 记录FIN发送状态
 			fin_sent_ = true;
 			fin_last_send_ = now;
 			fin_retry_count_ = 0;
-			cout << "[DEBUG] Sent FIN\n";
+			cout << "[DEBUG] Sent FIN" << endl;
 			return;
 		}
-		if (now - fin_last_send_ > HANDSHAKE_TIMEOUT_MS &&
-			fin_retry_count_ < MAX_FIN_RETRIES) {
+		// 处理FIN重传
+		if (now - fin_last_send_ > HANDSHAKE_TIMEOUT_MS && fin_retry_count_ < MAX_FIN_RETRIES) {
+			// 重传FIN包
 			PacketHeader fin{};
 			fin.seq = isn_ + window_.total_segments() + 1;
 			fin.ack = 0;
@@ -554,14 +562,15 @@ namespace rtp {
 			fin.len = 0;
 			fin.sack_mask = 0;
 			send_raw(fin, {});
+			// 更新重传状态
 			fin_last_send_ = now;
 			fin_retry_count_++;
-			cout << "[DEBUG] Retrying FIN (attempt " << fin_retry_count_ << "/"
-				 << MAX_FIN_RETRIES << ")\n";
+			cout << "[DEBUG] Retrying FIN (attempt " << fin_retry_count_ << "/" << MAX_FIN_RETRIES << ")" << endl;
 		}
 	}
 
 	void ReliableSender::handle_fin_ack() {
+		// 发送最终ACK包
 		PacketHeader final_ack{};
 		final_ack.seq = peer_isn_ + 1;
 		final_ack.ack = isn_ + window_.total_segments() + 2;
@@ -570,19 +579,21 @@ namespace rtp {
 		final_ack.len = 0;
 		final_ack.sack_mask = 0;
 		send_raw(final_ack, {});
+		// 标记连接完成
 		fin_complete_ = true;
-		cout << "[DEBUG] Received FIN+ACK, sent final ACK\n";
+		cout << "[DEBUG] Received FIN+ACK, sent final ACK, connection closed" << endl;
 	}
 
+	// 处理网络事件（接收ACK等）50ms超时
 	void ReliableSender::process_network() {
 		Packet pkt{};
 		sockaddr_in from{};
+		// 非阻塞接收数据包
 		if (wait_for_packet(pkt, from, 50)) {
 			if (!same_endpoint(from, remote_)) {
 				return;
 			}
-			if ((pkt.header.flags & FLAG_FIN) &&
-				(pkt.header.flags & FLAG_ACK)) {
+			if ((pkt.header.flags & FLAG_FIN) && (pkt.header.flags & FLAG_ACK)) {
 				handle_fin_ack();
 				return;
 			}
@@ -596,13 +607,13 @@ namespace rtp {
 		WSADATA wsa;  // WSA 数据结构
 		// 2.2 版本
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-			cerr << "WSAStartup failed\n";
+			cerr << "WSAStartup failed" << endl;
 			return -1;
 		}
 
 		sock_ = socket(AF_INET, SOCK_DGRAM, 0);
 		if (!socket_valid(sock_)) {
-			cerr << "Failed to create socket\n";
+			cerr << "Failed to create socket" << endl;
 			return 1;
 		}
 
@@ -612,27 +623,25 @@ namespace rtp {
 			local_addr.sin_family = AF_INET;
 			local_addr.sin_addr.s_addr = INADDR_ANY;
 			local_addr.sin_port = htons(local_port_);
-			if (bind(sock_, reinterpret_cast<const sockaddr*>(&local_addr),
-					 sizeof(local_addr)) < 0) {
-				cerr << "Failed to bind to local port " << local_port_ << "\n";
+			if (bind(sock_, reinterpret_cast<const sockaddr*>(&local_addr), sizeof(local_addr)) < 0) {
+				cerr << "Failed to bind to local port " << local_port_ << endl;
 				return 1;
 			}
-			cout << "[DEBUG] Bound to local port " << local_port_ << "\n";
+			cout << "[DEBUG] Bound to local port " << local_port_ << endl;
 		} else {
-			cout << "[DEBUG] Using system-assigned port\n";
+			cout << "[DEBUG] Using system-assigned port" << endl;
 		}
 
 		// 使用 inet_addr 替代 inet_pton 以兼容 MinGW
 		remote_.sin_addr.s_addr = inet_addr(dest_ip_.c_str());
 		if (remote_.sin_addr.s_addr == INADDR_NONE) {
-			cerr << "Invalid receiver address\n";
+			cerr << "Invalid receiver address" << endl;
 			return 1;
 		}
 
 		sockaddr_in local_addr{};
 		int addr_len = sizeof(local_addr);
-		if (getsockname(sock_, reinterpret_cast<sockaddr*>(&local_addr),
-						&addr_len) != 0) {
+		if (getsockname(sock_, reinterpret_cast<sockaddr*>(&local_addr), &addr_len) != 0) {
 			local_addr.sin_family = AF_INET;
 			local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 			local_addr.sin_port = 0;
@@ -640,28 +649,26 @@ namespace rtp {
 		isn_ = generate_isn(local_addr, remote_);
 
 		if (!handshake()) {
-			cerr << "Handshake failed\n";
+			cerr << "Handshake failed" << endl;
 			return 1;
 		}
 
 		ifstream in(file_path_, std::ios::binary);
 		if (!in) {
-			cerr << "Cannot open input file\n";
+			cerr << "Cannot open input file" << endl;
 			return 1;
 		}
-		file_data_ = vector<uint8_t>((std::istreambuf_iterator<char>(in)),
-									 std::istreambuf_iterator<char>());
+		file_data_ = vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-		cout << "[DEBUG] File size: " << file_data_.size() << " bytes\n";
+		cout << "[DEBUG] File size: " << file_data_.size() << " bytes" << endl;
 		window_.initialize(file_data_);
-		cout << "[DEBUG] Total segments: " << window_.total_segments() << "\n";
+		cout << "[DEBUG] Total segments: " << window_.total_segments() << endl;
 
 		peer_wnd_ = peer_wnd_ ? peer_wnd_ : window_size_;
 		congestion_ = CongestionControl(std::max<double>(2.0, peer_wnd_));
 
 		cout << "[DEBUG] Starting transmission - Window: " << window_size_
-			 << ", Initial cwnd: " << congestion_.get_cwnd()
-			 << ", ssthresh: " << congestion_.get_ssthresh() << "\n";
+			 << ", Initial cwnd: " << congestion_.get_cwnd() << ", ssthresh: " << congestion_.get_ssthresh() << endl;
 
 		// 初始化全局超时检测
 		last_ack_time_ = now_ms();
@@ -669,8 +676,7 @@ namespace rtp {
 		while (!fin_complete_) {
 			// 全局超时检测：长时间无ACK响应
 			if (now_ms() - last_ack_time_ > GLOBAL_TIMEOUT_MS) {
-				cerr << "[TIMEOUT] No ACK received for "
-					 << GLOBAL_TIMEOUT_MS / 1000 << "s, connection lost\n";
+				cerr << "[TIMEOUT] No ACK received for " << GLOBAL_TIMEOUT_MS / 1000 << "s, connection lost" << endl;
 				send_rst();
 				return 1;
 			}
@@ -689,9 +695,8 @@ namespace rtp {
 
 			try_send_fin();
 
-			if (fin_sent_ && !fin_complete_ &&
-				fin_retry_count_ >= MAX_FIN_RETRIES) {
-				cerr << "[WARN] FIN handshake failed after retries\n";
+			if (fin_sent_ && !fin_complete_ && fin_retry_count_ >= MAX_FIN_RETRIES) {
+				cerr << "[WARN] FIN handshake failed after retries" << endl;
 				break;
 			}
 		}
@@ -703,12 +708,11 @@ namespace rtp {
 			stats_.set_end_time(now_ms());
 		}
 
-		stats_.print_sender_stats(file_data_.size(), window_.total_segments(),
-								  congestion_.get_cwnd(),
+		stats_.print_sender_stats(file_data_.size(), window_.total_segments(), congestion_.get_cwnd(),
 								  congestion_.get_ssthresh());
 
 		if (!fin_complete_) {
-			cerr << "[WARN] FIN handshake did not complete cleanly\n";
+			cerr << "[WARN] FIN handshake did not complete cleanly" << endl;
 		}
 
 		return fin_complete_ ? 0 : 1;

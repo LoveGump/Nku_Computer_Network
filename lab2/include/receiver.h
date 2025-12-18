@@ -19,15 +19,14 @@ namespace rtp {
 	// 可靠接收端
 	class ReliableReceiver {
 	   public:
-		ReliableReceiver(uint16_t listen_port, string output_path,
-						 uint16_t window_size);
+		ReliableReceiver(uint16_t listen_port, string output_path, uint16_t window_size);
 		~ReliableReceiver();
 
 		int run();
 
 	   private:
 		// === 网络通信 ===
-		
+
 		/**
 		 * 等待接收数据包
 		 * @param pkt 输出参数，接收到的数据包
@@ -56,7 +55,7 @@ namespace rtp {
 
 		/**
 		 * 处理FIN包（连接关闭）
-		 * 1. 发送FIN+ACK
+		 * @param fin_seq FIN包的序号
 		 */
 		void handle_fin(uint32_t fin_seq);
 
@@ -68,23 +67,23 @@ namespace rtp {
 		void process_data_packet(const Packet& pkt, ofstream& out);
 
 		// === Socket相关 ===
-		socket_t sock_{INVALID_SOCKET_VALUE};
-		uint16_t listen_port_{0};
-		string output_path_;
-		uint16_t window_size_{0};
-		sockaddr_in client_{};
-		uint32_t isn_{0};
-		uint32_t peer_isn_{0};
+		socket_t sock_{INVALID_SOCKET_VALUE};  // 接收端Socket
+		uint16_t listen_port_{0};			   // 监听端口
+		string output_path_;				   // 输出文件路径
+		uint16_t window_size_{0};			   // 接收窗口大小
+		sockaddr_in client_{};				   // 客户端地址
+		uint32_t isn_{0};					   // 本端初始序号
+		uint32_t peer_isn_{0};				   // 对端初始序号
 
 		// === 模块化组件 ===
 		ReceiveBuffer buffer_;	// 接收缓冲区
 		TransferStats stats_;	// 统计信息
 
 		// === 统计 ===
-		size_t bytes_written_{0};
-		uint32_t total_packets_received_{0};
-		uint32_t duplicate_packets_{0};
-		uint32_t out_of_order_packets_{0};
+		size_t bytes_written_{0};			  // 写入文件的字节数
+		uint32_t total_packets_received_{0};  // 总接收包数
+		uint32_t duplicate_packets_{0};		  // 重复包数
+		uint32_t out_of_order_packets_{0};	  // 乱序包数
 
 		// === 超时检测 ===
 		int consecutive_timeouts_{0};  // 连续超时次数

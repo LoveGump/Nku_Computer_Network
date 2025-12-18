@@ -68,8 +68,7 @@ namespace rtp {
 		}
 
 		if (!ensure_parent_directory(file_path)) {
-			throw std::runtime_error("Failed to create log directory for: " +
-									 file_path);
+			throw std::runtime_error("Failed to create log directory for: " + file_path);
 		}
 
 		file_.open(file_path, std::ios::out | std::ios::app);
