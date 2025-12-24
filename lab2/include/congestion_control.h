@@ -27,7 +27,7 @@ namespace rtp {
 		// 返回true表示应该执行快速重传
 		bool should_fast_retransmit() const;
 
-		// 执行快速重传后的处理
+		// 执行快速重传后拥塞控制部分的处理
 		// ssthresh = cwnd/2, cwnd = ssthresh + 3, 进入快速恢复
 		// 记录recover_seq用于部分ACK检测
 		void on_fast_retransmit(uint32_t next_seq);

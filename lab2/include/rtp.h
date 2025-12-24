@@ -54,7 +54,7 @@ namespace rtp {
 	// 修改为大端序，组装数据包
 	vector<uint8_t> serialize_packet(const PacketHeader& header, const vector<uint8_t>& payload);
 
-	// 验证校验，转换为小端序，并将数据提取到Packet结构体
+	// 解析数据包并检验校验和
 	bool parse_packet(const uint8_t* data, size_t len, Packet& out);
 
 	// 生成初始序号（ISN），基于本地和远程地址的哈希
@@ -63,5 +63,7 @@ namespace rtp {
 	// 获取当前时间戳（毫秒）
 	uint64_t now_ms();
 	string addr_to_string(const sockaddr_in& addr);
+
+	bool same_endpoint(const sockaddr_in& a, const sockaddr_in& b);
 
 }  // namespace rtp

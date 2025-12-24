@@ -19,7 +19,7 @@ namespace rtp {
 	// 可靠接收端
 	class ReliableReceiver {
 	   public:
-		ReliableReceiver(uint16_t listen_port, string output_path, uint16_t window_size);
+		ReliableReceiver(uint16_t listen_port, string output_path, uint16_t window_size = 32);
 		~ReliableReceiver();
 
 		int run();

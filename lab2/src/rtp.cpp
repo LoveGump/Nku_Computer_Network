@@ -30,6 +30,7 @@ namespace rtp {
 		}
 	}  // namespace
 
+	// 校验和计算
 	uint16_t compute_checksum(const uint8_t* data, size_t len) {
 		uint32_t sum = 0;  // 32 位累加器
 		size_t i = 0;
@@ -76,6 +77,7 @@ namespace rtp {
 		return buffer;
 	}
 
+	// 校验校验和
 	bool parse_packet(const uint8_t* data, size_t len, Packet& out) {
 		if (len < sizeof(PacketHeader)) {
 			// 数据包长度小于头部长度，非法包
@@ -141,4 +143,9 @@ namespace rtp {
 		char* ip_str = inet_ntoa(addr.sin_addr);
 		return string(ip_str) + ":" + std::to_string(ntohs(addr.sin_port));
 	}
+
+	bool same_endpoint(const sockaddr_in& a, const sockaddr_in& b) {
+		return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
+	}
+
 }  // namespace rtp

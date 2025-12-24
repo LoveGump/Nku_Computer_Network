@@ -21,11 +21,6 @@ namespace rtp {
 		constexpr uint16_t SACK_WINDOW_LIMIT = 32;
 		// 最大连续超时次数（超过则认为sender已断开）
 		constexpr int MAX_CONSECUTIVE_TIMEOUTS = 10;
-
-		// 检查两个地址是否相同
-		bool same_endpoint(const sockaddr_in& a, const sockaddr_in& b) {
-			return a.sin_addr.s_addr == b.sin_addr.s_addr && a.sin_port == b.sin_port;
-		}
 	}  // namespace
 
 	// 窗口大小和SACK位图宽度保持一致
@@ -56,6 +51,7 @@ namespace rtp {
 		// 它把 sock_ 交给内核监视可读事件，内核在有数据到达（或错误/关闭）时把 socket 标记为“可读”，select
 		// 就返回 >0，rfds 里该 socket 仍在集合。然后才去 recvfrom 把包读出来；如果到超时时间还没有可读，select 返回
 		// 0，视为超 时。
+		// nullptr 表示不设置超时，无限等待
 		int rv = select(0, &rfds, nullptr, nullptr, timeout_ms >= 0 ? &tv : nullptr);
 		if (rv <= 0) {
 			// 超时或出错
@@ -65,19 +61,21 @@ namespace rtp {
 		// 接收数据包
 		sockaddr_in peer{};
 		socklen_t len = sizeof(peer);  // 地址长度
-		vector<uint8_t> buf(2048);	   // 接收缓冲区
-		// 接收数据
+		vector<uint8_t> buf(2048);	   // 2KB
+		// 接收数据  flags=0 表示阻塞接收 ，记录发送方地址到 peer
 		int n = recvfrom(sock_, reinterpret_cast<char*>(buf.data()), static_cast<int>(buf.size()), 0,
 						 reinterpret_cast<sockaddr*>(&peer), &len);
 		if (n <= 0) {
 			// 接收失败
 			return false;
 		}
+
+		// 检验校验和并	将数据包解析到 pkt
 		if (!parse_packet(buf.data(), static_cast<size_t>(n), pkt)) {
-			// 解析失败
 			return false;
 		}
-		// 返回发送方地址
+
+		// 记录发送方地址
 		from = peer;
 		return true;
 	}
@@ -100,13 +98,13 @@ namespace rtp {
 		PacketHeader ack{};
 		ack.seq = isn_ + 1;	 // 本端下一个序号
 		// ack 是否为 FIN+ACK，否则就是下一个序号
-		ack.ack = fin ? fin_ack : buffer_.get_expected_seq();
+		ack.ack = fin ? fin_ack : buffer_.get_expected_seq(); // 期望接收的下一个序列号
 		// 设置标志位、窗口大小、SACK掩码
 		ack.flags = FLAG_ACK | (fin ? FLAG_FIN : 0);
 		ack.wnd = window_size_;								  // 通告接收窗口大小
 		ack.len = 0;										  // 普通ACK携带SACK掩码，FIN+ACK不携带
 		ack.sack_mask = fin ? 0 : buffer_.build_sack_mask();  // SACK掩码
-		// 发送ACK包
+		// 发送带SACK掩码的ACK包
 		send_raw(ack, {});
 	}
 
@@ -137,7 +135,7 @@ namespace rtp {
 		sockaddr_in from{};
 		cout << "Waiting for SYN on port " << listen_port_ << "..." << endl;
 		while (true) {
-			// 等待SYN包
+			// 无限等待SYN包
 			if (!wait_for_packet(pkt, from, -1)) {
 				continue;
 			}
@@ -146,7 +144,7 @@ namespace rtp {
 				continue;
 			}
 
-			// 收到SYN，记录客户端地址和ISN
+			// 收到SYN，记录发送方的地址和ISN
 			client_ = from;
 			peer_isn_ = pkt.header.seq;
 			cout << "[DEBUG] Received SYN from " << addr_to_string(from) << endl;
@@ -157,7 +155,7 @@ namespace rtp {
 			if (getsockname(sock_, reinterpret_cast<sockaddr*>(&local_info), &local_len) != 0) {
 				// 获取本地地址失败，使用通配地址
 				local_info.sin_family = AF_INET;				 // IPv4
-				local_info.sin_addr.s_addr = htonl(INADDR_ANY);	 // 任意地址
+				local_info.sin_addr.s_addr = htonl(INADDR_ANY);	 // 本机的所有 IP 地址
 				local_info.sin_port = htons(listen_port_);		 // 监听端口
 			}
 			// 生成ISN
@@ -165,8 +163,8 @@ namespace rtp {
 
 			// 发送SYN+ACK包
 			PacketHeader syn_ack{};
-			syn_ack.seq = isn_;					  // 本端ISN
-			syn_ack.ack = peer_isn_ + 1;		  // 确认号为对端ISN+1
+			syn_ack.seq = isn_;					  // seq序号为本端ISN
+			syn_ack.ack = peer_isn_ + 1;		  // ack 为对端 ISN+1
 			syn_ack.flags = FLAG_SYN | FLAG_ACK;  // SYN和ACK标志
 			syn_ack.wnd = window_size_;			  // 通告接收窗口大小
 			syn_ack.len = 0;					  // 无负载
@@ -175,6 +173,7 @@ namespace rtp {
 			bool acked = false;	 // 标记是否收到ACK
 			// 等待ACK包
 			for (int attempt = 0; attempt < MAX_HANDSHAKE_RETRIES && !acked; ++attempt) {
+				// 在不同重试次数内发送SYN+ACK
 				send_raw(syn_ack, {});	// 发送SYN+ACK
 				// 等待ACK或数据包（隐式完成握手）
 				cout << "[DEBUG] Sent SYN+ACK (attempt " << (attempt + 1) << "/" << MAX_HANDSHAKE_RETRIES << ")"
@@ -183,24 +182,25 @@ namespace rtp {
 				// 等待 ACK 包
 				Packet confirm{};
 				sockaddr_in confirm_from{};
+				// 超时时间为 HANDSHAKE_TIMEOUT_MS 毫秒
 				if (wait_for_packet(confirm, confirm_from, HANDSHAKE_TIMEOUT_MS) &&
 					same_endpoint(confirm_from, client_)) {
-					// 收到RST段，连接被对方重置
+					// 收到来自客户端的包
+
+					// 处理RST段
 					if (confirm.header.flags & FLAG_RST) {
-						cerr << "[RST] Received RST during handshake, "
-								"connection reset by peer"
-							 << endl;
+						cerr << "[RST] Received RST during handshake, connection reset by peer" << endl;
 						return false;
 					}
-					// 收到 ACK 或数据包都表示握手完成
+
+					// 检查是否为ACK包
 					if ((confirm.header.flags & FLAG_ACK) && confirm.header.ack == syn_ack.seq + 1) {
+						// 收到 ACK ，并且确认号正确
 						cout << "[DEBUG] Received ACK, handshake completed" << endl;
 						acked = true;
 					} else if (confirm.header.flags & FLAG_DATA) {
-						// 隐式完成握手
-						cout << "[DEBUG] Received DATA (implicit ACK), "
-								"handshake completed"
-							 << endl;
+						// 收到数据包，隐式完成握手
+						cout << "[DEBUG] Received DATA (implicit ACK), handshake completed" << endl;
 						acked = true;
 					}
 				}
@@ -208,6 +208,7 @@ namespace rtp {
 
 			if (acked) {
 				// 握手完成，初始化期望序列号为 peer_isn + 1
+				// 滑动窗口：初始化左边界为 peer_isn + 1
 				buffer_.set_expected_seq(peer_isn_ + 1);
 				return true;
 			}
@@ -229,12 +230,12 @@ namespace rtp {
 		total_packets_received_++;		// 统计总接收包数
 		uint32_t seq = pkt.header.seq;	// 数据包序号
 
-		// 检查重复或窗口外
+		// 检查是否为重复包或窗口外的包
 		if (seq < buffer_.get_expected_seq()) {
-			// 收到重复包
+			// 小于期望序号，重复包
 			duplicate_packets_++;
 			cout << "[DUP] Duplicate packet seq=" << seq << " (expected: " << buffer_.get_expected_seq() << ")" << endl;
-			send_ack();	 // 发送ack
+			send_ack();	 // 发送新的ack
 			return;
 		}
 
@@ -242,53 +243,52 @@ namespace rtp {
 			// 超出接收窗口
 			cout << "[OVERFLOW] Packet seq=" << seq << " out of window (expected: " << buffer_.get_expected_seq()
 				 << ", window: " << window_size_ << ")" << endl;
-			send_ack();	 // 发送ack
+			send_ack();	 // 发送新的ack
 			return;
 		}
 
-		// 添加到缓冲区
+		// 将接受的数据添加到缓冲区
 		if (buffer_.add_segment(seq, pkt.payload)) {
 			// 新包成功添加
 			if (seq > buffer_.get_expected_seq()) {
 				// 如果不是期望的序号，统计乱序包
 				out_of_order_packets_++;
-				cout << "[OOO] Out-of-order packet seq=" << seq << " (expected: " << buffer_.get_expected_seq() << ")"
-					 << endl;
+				// cout << "[OOO] Out-of-order packet seq=" << seq << " (expected: " << buffer_.get_expected_seq() <<
+				// ")"
+				// 	 << endl;
 			}
 		} else {
-			// 重复包
+			// 已经在缓冲区的重复包
 			duplicate_packets_++;
 			cout << "[DUP] Duplicate packet seq=" << seq << " (already buffered)" << endl;
 		}
 
-		// 提取并写入连续段
+		// 滑动窗口：提取数据并，推进窗口左边界
 		auto segments = buffer_.extract_continuous_segments();
+		// 将提取到的数据写入文件
 		for (const auto& data : segments) {
 			out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
 			bytes_written_ += data.size();
 		}
-
-		send_ack();	 // 发送ACK+SACK
+		
+		// 发送ACK+SACK
+		send_ack();	 
 	}
 
 	/**
 	 * 处理FIN包（连接关闭）
-	 * 1. 发送FIN+ACK
-	 * 2. 等待最终ACK
-	 * 3. 如果超时未收到ACK，重传FIN+ACK（最多MAX_FIN_RETRIES次）
+	 * @param fin_seq FIN包的序号
 	 */
-
 	void ReliableReceiver::handle_fin(uint32_t fin_seq) {
 		cout << "[DEBUG] Received FIN" << endl;
 
 		if (stats_.get_end_time() == 0) {
-			// 记录结束时间
 			stats_.set_end_time(now_ms());
 		}
 
 		// 发送FIN+ACK
 		uint32_t fin_ack_seq = fin_seq + 1;
-		send_ack(true, fin_ack_seq);
+		send_ack(true, fin_ack_seq);  // 发送FIN+ACK
 		cout << "[DEBUG] Sent FIN+ACK" << endl;
 
 		// 等待最终ACK
@@ -298,7 +298,9 @@ namespace rtp {
 		sockaddr_in from{};
 
 		while (fin_ack_attempts < MAX_FIN_RETRIES && !final_ack_seen) {
-			// 当前次数小于最大重试次数且未收到最终ACK
+			// fin发送次数未达上限且未收到最终ACK
+
+			// 等待握手时间，收集最终ACK
 			if (wait_for_packet(final_ack, from, HANDSHAKE_TIMEOUT_MS)) {
 				// 收到数据包，检查是否为最终ACK
 				if (!same_endpoint(from, client_)) {
@@ -307,9 +309,7 @@ namespace rtp {
 				if (final_ack.header.flags & FLAG_ACK) {
 					// 收到最终ACK，握手完成
 					final_ack_seen = true;
-					cout << "[DEBUG] Final ACK received, close handshake "
-							"completed"
-						 << endl;
+					cout << "[DEBUG] Final ACK received, close handshake completed" << endl;
 				} else if (final_ack.header.flags & FLAG_FIN) {
 					// 收到重复FIN，重传FIN+ACK
 					send_ack(true, fin_ack_seq);
@@ -331,33 +331,37 @@ namespace rtp {
 	}
 
 	int ReliableReceiver::run() {
-		WSADATA wsa;  // WSA 数据结构
-		// 2.2 版本
+		WSADATA wsa;  // WSA 2.2 版本
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
 			cerr << "WSAStartup failed" << endl;
 			return -1;
 		}
 
+		// 创建UDP Socket
 		sock_ = socket(AF_INET, SOCK_DGRAM, 0);
 		if (!socket_valid(sock_)) {
 			cerr << "Failed to create socket" << endl;
 			return 1;
 		}
 
+		// 绑定监听端口
 		sockaddr_in addr{};
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = htonl(INADDR_ANY);
-		addr.sin_port = htons(listen_port_);
+		addr.sin_family = AF_INET;				   // IPv4
+		addr.sin_addr.s_addr = htonl(INADDR_ANY);  // 本机的所有 IP 地址
+		addr.sin_port = htons(listen_port_);	   // 监听端口
 		if (bind(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
 			cerr << "Bind failed" << endl;
 			return 1;
 		}
 
+		// 执行三次握手
 		if (!do_handshake()) {
 			cerr << "Handshake failed" << endl;
 			return 1;
 		}
 		cout << "Connection established with " << addr_to_string(client_) << endl;
+
+		// 打开输出文件
 		ofstream out(output_path_, std::ios::binary);
 		if (!out) {
 			cerr << "Cannot open output file" << endl;
@@ -365,15 +369,18 @@ namespace rtp {
 		}
 
 		cout << "[DEBUG] Starting data reception - Window size: " << window_size_ << endl;
+		// 记录开始时间
 		stats_.set_start_time(now_ms());
 
 		while (true) {
 			Packet p{};
 			sockaddr_in from{};
+			// 等待数据包，5000ms没有收到新的数据包则认为是超时
 			if (!wait_for_packet(p, from, DATA_TIMEOUT_MS)) {
 				// 连续超时检测
 				consecutive_timeouts_++;
 				if (consecutive_timeouts_ >= MAX_CONSECUTIVE_TIMEOUTS) {
+					// 如果超过最大连续超时次数，认为sender已断开连接
 					cerr << "[TIMEOUT] No data received for " << consecutive_timeouts_
 						 << " consecutive timeouts (total " << (consecutive_timeouts_ * DATA_TIMEOUT_MS / 1000)
 						 << "s), sender likely disconnected" << endl;
@@ -383,6 +390,7 @@ namespace rtp {
 			}
 			consecutive_timeouts_ = 0;	// 收到包后重置计数
 
+			// 确认包来自已连接的客户端
 			if (!same_endpoint(from, client_)) {
 				continue;
 			}
@@ -393,23 +401,24 @@ namespace rtp {
 				break;
 			}
 
+			// 处理FIN包（连接关闭）
 			if (p.header.flags & FLAG_FIN) {
 				handle_fin(p.header.seq);
 				break;
 			}
 
+			// 处理数据包
 			if (p.header.flags & FLAG_DATA) {
 				process_data_packet(p, out);
 			}
 		}
 
+		// 非FIN关闭连接，记录时间
 		if (stats_.get_end_time() == 0) {
 			stats_.set_end_time(now_ms());
 		}
-		if (stats_.get_start_time() == 0) {
-			stats_.set_start_time(stats_.get_end_time());
-		}
 
+		// 打印统计信息
 		stats_.print_receiver_stats(bytes_written_, total_packets_received_, out_of_order_packets_, duplicate_packets_);
 
 		return 0;

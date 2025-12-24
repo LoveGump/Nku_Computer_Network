@@ -25,7 +25,7 @@ namespace rtp {
 			uint64_t last_send{0};		   // 最后发送时间（用于超时检测）
 			uint64_t last_sack_retx{0};	   // 最后SACK重传时间（避免频繁重传）
 			int retrans_count{0};		   // 重传次数（用于检测连接断开）
-			uint64_t send_timestamp{0};	   // 首次发送时间戳（用于RTT测量）
+			uint64_t send_timestamp{0};	   // 首次发送时间戳
 			bool is_retransmitted{false};  // 是否被重传过（Karn算法）
 		};
 		SendWindow();
@@ -55,6 +55,7 @@ namespace rtp {
 		// 获取/设置下一个待发送序号
 		uint32_t get_next_seq() const { return next_seq_; }
 		void set_next_seq(uint32_t seq) { next_seq_ = seq; }
+		// 推进下一个待发送序号
 		void advance_next_seq() { next_seq_++; }
 
 		// 推进base_seq到第一个未确认的段

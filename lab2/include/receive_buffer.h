@@ -1,4 +1,4 @@
-// 接收缓冲区管理头文件
+// 接收缓冲区
 #pragma once
 
 #include <cstdint>
@@ -48,7 +48,7 @@ namespace rtp {
 		uint16_t get_window_size() const { return window_size_; }
 
 	   private:
-		uint32_t expected_seq_;					 // 下一个期望的序号
+		uint32_t expected_seq_;					 // 下一个期望接受数据段的序号
 		uint16_t window_size_;					 // 接收窗口大小
 		map<uint32_t, vector<uint8_t>> buffer_;	 // 乱序段缓冲区
 	};

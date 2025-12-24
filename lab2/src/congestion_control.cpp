@@ -11,12 +11,15 @@ namespace rtp {
 		: cwnd_(1.0), ssthresh_(initial_ssthresh), dup_ack_count_(0), in_fast_recovery_(false), recover_seq_(0) {}
 
 	bool CongestionControl::on_new_ack(uint32_t ack_seq, uint32_t next_seq) {
-		dup_ack_count_ = 0;
+
+		dup_ack_count_ = 0;			  // 重置重复ACK计数
 		bool is_partial_ack = false;  // 标记是否为部分ACK
 
-		// NewReno: 如果处于快速恢复，检查是部分ACK还是完整ACK
+		// Reno: 如果处于快速恢复，当收到新的ACK的时候退出快速恢复
+		// 这里使用newReno的部分ACK处理，但是写完之后感觉没有什么用，SACK已经处理了大部分丢包
 		if (in_fast_recovery_) {
-			// 如果处于快速恢复，检查ACK类型
+			// 这里采用NewReno的部分ACK处理
+			// 当收到新的ACK时，检查是否为部分ACK，如果是，则重传下一个未确认的段
 			if (ack_seq < recover_seq_) {
 				// 部分ACK：只确认了部分数据，说明后面还有丢包继续重传下一个段
 				is_partial_ack = true;
@@ -26,9 +29,7 @@ namespace rtp {
 				// 完整ACK：所有数据都确认了，退出快速恢复
 				cwnd_ = ssthresh_;	// 设置cwnd为ssthresh
 				in_fast_recovery_ = false;
-				cout << "[NewReno] Full ACK received, exiting fast recovery "
-						"(cwnd="
-					 << cwnd_ << ")" << endl;
+				cout << "[Reno] Full ACK received, exiting fast recovery (cwnd=" << cwnd_ << ")" << endl;
 			}
 		}
 
@@ -60,23 +61,25 @@ namespace rtp {
 	bool CongestionControl::should_fast_retransmit() const { return dup_ack_count_ == 3 && !in_fast_recovery_; }
 
 	void CongestionControl::on_fast_retransmit(uint32_t next_seq) {
-		cout << "[LOSS] Detected 3 duplicate ACKs, triggering fast retransmit "
-				"(cwnd: "
+		// 快重传
+		cout << "[LOSS] Detected 3 duplicate ACKs, triggering fast retransmit (cwnd: "
 			 << cwnd_ << " -> " << (cwnd_ / 2.0 + 3.0) << ")" << endl;
 
 		ssthresh_ = std::max(4.0, cwnd_ / 2.0);	 // 最小为4
-		cwnd_ = ssthresh_ + 3.0;
+		cwnd_ = ssthresh_ + 3.0;					// 增加3个MSS以应对网络中离开的包
 		in_fast_recovery_ = true;
 		recover_seq_ = next_seq;  // 记录进入快速恢复时的最高序列号
 	}
 
+	
 	void CongestionControl::on_timeout() {
 		cout << "[TIMEOUT] Congestion control timeout (cwnd: " << cwnd_ << " -> 1.0, ssthresh: " << ssthresh_ << " -> "
 			 << (cwnd_ / 2.0) << ")" << endl;
-
-		ssthresh_ = std::max(4.0, cwnd_ / 2.0);
+		// 慢启动
+		ssthresh_ = std::max(4.0, cwnd_ / 2.0); // 最小为4
 		cwnd_ = 1.0;
-		dup_ack_count_ = 0;
+		// 重置拥塞控制状态  		
+		dup_ack_count_ = 0;	
 		in_fast_recovery_ = false;
 		recover_seq_ = 0;
 	}

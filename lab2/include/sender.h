@@ -29,13 +29,6 @@ namespace rtp {
 		int run();
 
 	   private:
-		/**
-		 * 等待接收数据包
-		 * @param pkt 输出参数，接收到的数据包
-		 * @param from 输出参数，发送方地址
-		 * @param timeout_ms 超时时间（毫秒），-1表示无限等待
-		 * @return 是否成功接收到数据包
-		 */
 		bool wait_for_packet(Packet& pkt, sockaddr_in& from, int timeout_ms);
 		int send_raw(const PacketHeader& hdr, const vector<uint8_t>& payload);
 		void send_rst();  // 发送RST段，强制终止连接
@@ -43,6 +36,8 @@ namespace rtp {
 		bool handshake();		// 执行三次握手建立连接
 		void try_send_fin();	// 尝试发送FIN段
 		void handle_fin_ack();	// 处理收到的FIN确认
+		void report_progress(bool force = false);
+		void add_acked_bytes(uint32_t seq);
 
 		void transmit_segment(uint32_t seq);
 		void try_send_data();
@@ -67,7 +62,7 @@ namespace rtp {
 		void send_window_probe();	 // 发送窗口探测段
 
 		// === Socket相关 ===
-		socket_t sock_{INVALID_SOCKET_VALUE};
+		socket_t sock_{INVALID_SOCKET_VALUE};  // 本端Socket
 		sockaddr_in remote_{};
 		string dest_ip_;
 		uint16_t dest_port_{0};
@@ -79,12 +74,15 @@ namespace rtp {
 		string file_path_;
 		uint16_t window_size_{0};
 		uint16_t peer_wnd_{0};
-		vector<uint8_t> file_data_;
+		vector<uint8_t> file_data_;	 // 待发送文件数据
 
 		// === 模块化组件 ===
-		SendWindow window_;				// 发送窗口管理
-		CongestionControl congestion_;	// 拥塞控制
-		TransferStats stats_;			// 统计信息
+		SendWindow window_;				   // 发送窗口管理
+		CongestionControl congestion_;	   // 拥塞控制
+		TransferStats stats_;			   // 统计信息
+		size_t bytes_acked_{0};			   // 已确认字节数（用于进度显示）
+		uint64_t last_progress_print_{0};  // 上次进度打印时间
+		int last_progress_percent_{-1};	   // 上次打印的进度百分比
 
 		// === FIN状态 ===
 		bool fin_sent_{false};		 // 是否已发送FIN
@@ -97,7 +95,7 @@ namespace rtp {
 		uint64_t last_ack_time_{0};	 // 最后收到ACK的时间
 
 		// === 窗口探测（Window Probing / Persist Timer） ===
-		bool zero_window_{false};	 // 对端窗口是否为零
+		bool zero_window_{false};	 // 处于零窗口状态
 		uint64_t persist_timer_{0};	 // 持续计时器（下次探测时间）
 		int persist_backoff_{0};	 // 指数退避级别（0~12）
 		uint32_t probe_seq_{0};		 // 窗口探测序列号

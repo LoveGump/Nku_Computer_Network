@@ -1,3 +1,4 @@
+// 接收缓冲区实现
 #include "receive_buffer.h"
 
 #include <iostream>
