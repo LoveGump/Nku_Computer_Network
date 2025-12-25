@@ -35,7 +35,7 @@
 └─ build/                  (CMake 构建目录，构建后生成)
 ```
 
-## 项目框架（模块划分）
+## 项目框架
 
 整体结构是“两端程序 + 一组可复用协议组件”：
 
@@ -60,25 +60,25 @@
 
 ## 构建方式
 
-本项目使用 CMake（C++17），默认会生成两个可执行文件：`sender` 与 `receiver`（见 `CMakeLists.txt`）。
+本项目使用 CMake ，默认会生成两个可执行文件：`sender` 与 `receiver`（见 `CMakeLists.txt`）。
+
+在receiver_main.cpp和sender_main.cpp 可以选择日志是否输出到控制台，当前配置为输出到控制台，方便调试。如需关闭控制台输出，可将对应文件中 Logger 初始化的第二个参数改为 false 。
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SH="CMAKE_SH-NOTFOUND"
 cmake --build build --config Release
 ```
 
-产物位置取决于生成器：
-- 多配置生成器：`build/Release/sender(.exe)`、`build/Release/receiver(.exe)`
-- 单配置生成器：`build/sender(.exe)`、`build/receiver(.exe)`
+产物位置`build/sender.exe`、`build/receiver.exe`
 
-## 运行方式（最重要）
+## 运行方式
 
 先启动接收端，再启动发送端。
 
 ### 1）启动接收端
 
 ```bash
-receiver(.exe) <listen_port> <output_file> [window_size]
+./build/receiver.exe <listen_port> <output_file> [window_size]
 ```
 
 - `listen_port`：监听端口，例如 `8000`
@@ -87,13 +87,13 @@ receiver(.exe) <listen_port> <output_file> [window_size]
 
 示例：
 ```bash
-./receiver 8000 out.bin 32
+./build/receiver.exe 8000 out.bin 32
 ```
-
+运行后等待发送端连接。
 ### 2）启动发送端
 
 ```bash
-sender(.exe) <receiver_ip> <receiver_port> <input_file> <window_size> [local_port]
+./build/sender.exe <receiver_ip> <receiver_port> <input_file> <window_size> [local_port]
 ```
 
 - `receiver_ip`/`receiver_port`：接收端 IP 与端口
@@ -103,20 +103,13 @@ sender(.exe) <receiver_ip> <receiver_port> <input_file> <window_size> [local_por
 
 示例（本机回环）：
 ```bash
-./sender 127.0.0.1 8000 .\2.jpg 32
+./build/sender.exe 127.0.0.1 8000 .\2.jpg 32
 ```
 
 运行结束后：
 - receiver 侧会生成 `output_file`
 - sender/receiver 默认把日志写到 `logs/sender.log`、`logs/receiver.log`
 
-## 在不可靠网络下运行（可选）
+## 在不可靠网络下运行
 
-在 Windows 上可用 clumsy 对 UDP 注入丢包/延迟；做对比实验时建议：
-- 固定测试文件（如 `2.jpg`）
-- 每个配置重复多次取均值
-- 分别只改变一个变量（窗口大小 / 丢包率）
-
-## 常见问题
-
-- 传输很慢：通常与丢包/延迟、窗口设置、以及拥塞控制回退有关；建议先在无丢包条件下验证正确性，再逐步增加丢包率进行对比。
+在 Windows 上可用 clumsy 对 UDP 注入丢包/延迟；

@@ -15,7 +15,7 @@ static void usage(const char* prog) {
 
 int main(int argc, char** argv) {
 	try {
-		Logger::instance().init("logs/receiver.log", false);
+		Logger::instance().init("logs/receiver.log", true);
 	} catch (const std::exception& ex) {
 		cerr << "Logger init failed: " << ex.what() << endl;
 	}

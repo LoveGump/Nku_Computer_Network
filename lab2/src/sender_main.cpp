@@ -14,7 +14,7 @@ static void usage(const char* prog) {
 static constexpr uint16_t DEFAULT_LOCAL_PORT = 9000;
 int main(int argc, char** argv) {
 	try {
-		rtp::Logger::instance().init("logs/sender.log", false);
+		rtp::Logger::instance().init("logs/sender.log", true);
 	} catch (const std::exception& ex) {
 		std::cerr << "Logger init failed: " << ex.what() << std::endl;
 	}

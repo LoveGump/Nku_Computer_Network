@@ -1,0 +1,80 @@
+[
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\sender_main.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\sender_main.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/sender_main.cpp",
+  "output": "CMakeFiles/sender.dir/src/sender_main.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\sender.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\sender.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/sender.cpp",
+  "output": "CMakeFiles/sender.dir/src/sender.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\rtp.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\rtp.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/rtp.cpp",
+  "output": "CMakeFiles/sender.dir/src/rtp.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\congestion_control.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\congestion_control.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/congestion_control.cpp",
+  "output": "CMakeFiles/sender.dir/src/congestion_control.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\send_window.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\send_window.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/send_window.cpp",
+  "output": "CMakeFiles/sender.dir/src/send_window.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\transfer_stats.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\transfer_stats.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/transfer_stats.cpp",
+  "output": "CMakeFiles/sender.dir/src/transfer_stats.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/sender.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\sender.dir\\src\\utils\\logger.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\utils\\logger.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/utils/logger.cpp",
+  "output": "CMakeFiles/sender.dir/src/utils/logger.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\receiver_main.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\receiver_main.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/receiver_main.cpp",
+  "output": "CMakeFiles/receiver.dir/src/receiver_main.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\receiver.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\receiver.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/receiver.cpp",
+  "output": "CMakeFiles/receiver.dir/src/receiver.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\rtp.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\rtp.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/rtp.cpp",
+  "output": "CMakeFiles/receiver.dir/src/rtp.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\receive_buffer.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\receive_buffer.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/receive_buffer.cpp",
+  "output": "CMakeFiles/receiver.dir/src/receive_buffer.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\transfer_stats.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\transfer_stats.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/transfer_stats.cpp",
+  "output": "CMakeFiles/receiver.dir/src/transfer_stats.cpp.obj"
+},
+{
+  "directory": "F:/code/Computer_Network/lab2/build",
+  "command": "F:\\Apps\\ming64\\bin\\g++.exe  @CMakeFiles/receiver.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\receiver.dir\\src\\utils\\logger.cpp.obj -c F:\\code\\Computer_Network\\lab2\\src\\utils\\logger.cpp",
+  "file": "F:/code/Computer_Network/lab2/src/utils/logger.cpp",
+  "output": "CMakeFiles/receiver.dir/src/utils/logger.cpp.obj"
+}
+]
