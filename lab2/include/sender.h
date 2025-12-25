@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,8 @@ namespace rtp {
 		void add_acked_bytes(uint32_t seq);
 
 		void transmit_segment(uint32_t seq);
+		size_t payload_len_for_seq(uint32_t seq) const;
+		bool load_segment_payload(uint32_t seq, vector<uint8_t>& out);
 		void try_send_data();
 		void process_network();
 
@@ -74,7 +77,8 @@ namespace rtp {
 		string file_path_;
 		uint16_t window_size_{0};
 		uint16_t peer_wnd_{0};
-		vector<uint8_t> file_data_;	 // 待发送文件数据
+		uint64_t file_size_{0};
+		std::ifstream input_;
 
 		// === 模块化组件 ===
 		SendWindow window_;				   // 发送窗口管理
@@ -86,7 +90,7 @@ namespace rtp {
 
 		// === FIN状态 ===
 		bool fin_sent_{false};		 // 是否已发送FIN
-		bool fin_complete_{false};	 // FIN是否完成
+		bool fin_complete_{false};	 // FIN是否完成（已收到FIN+ACK并发送最终ACK）
 		uint64_t fin_last_send_{0};	 // 上次发送FIN的时间
 		int fin_retry_count_{0};	 // FIN重传计数
 		bool data_timing_recorded_{false};

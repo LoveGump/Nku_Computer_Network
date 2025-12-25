@@ -28,7 +28,7 @@ namespace rtp {
 	constexpr uint16_t FLAG_RST = 0x10;	  // RST，复位段，用于异常终止连接
 
 	constexpr int HANDSHAKE_TIMEOUT_MS = 8000;	// 握手超时时间（毫秒）
-	constexpr int DATA_TIMEOUT_MS = 5000;		// 数据传输超时时间（毫秒）
+	constexpr int DATA_TIMEOUT_MS = 50000;		// 数据传输超时时间（毫秒）
 
 #pragma pack(push, 1)
 	struct PacketHeader {

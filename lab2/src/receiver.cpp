@@ -17,6 +17,10 @@ namespace rtp {
 		constexpr int MAX_HANDSHAKE_RETRIES = 5;
 		// 最大FIN重试次数
 		constexpr int MAX_FIN_RETRIES = 5;
+		// 关闭阶段：为了让 sender 能尽快收到 FIN+ACK，同时不让 receiver 长时间卡住，
+		// 采用短时间“突发重传”策略：最多发送若干次 FIN+ACK，并在间隔内尝试接收最终 ACK。
+		constexpr int FIN_ACK_BURST = 3;
+		constexpr int FIN_ACK_WAIT_MS = 200;
 		// SACK窗口大小限制（与SACK位图宽度一致）
 		constexpr uint16_t SACK_WINDOW_LIMIT = 32;
 		// 最大连续超时次数（超过则认为sender已断开）
@@ -286,47 +290,34 @@ namespace rtp {
 			stats_.set_end_time(now_ms());
 		}
 
-		// 发送FIN+ACK
 		uint32_t fin_ack_seq = fin_seq + 1;
-		send_ack(true, fin_ack_seq);  // 发送FIN+ACK
-		cout << "[DEBUG] Sent FIN+ACK" << endl;
 
-		// 等待最终ACK
+		// 关闭阶段不再无限等待“最终ACK”，避免 sender 已退出时 receiver 卡住。
+		// 这里采用突发发送 FIN+ACK（提高送达概率），并在短间隔内尝试接收最终 ACK。
 		bool final_ack_seen = false;
-		int fin_ack_attempts = 0;
-		Packet final_ack{};
-		sockaddr_in from{};
+		for (int i = 0; i < FIN_ACK_BURST; ++i) {
+			send_ack(true, fin_ack_seq);
+			cout << "[DEBUG] Sent FIN+ACK (burst " << (i + 1) << "/" << FIN_ACK_BURST << ")" << endl;
 
-		while (fin_ack_attempts < MAX_FIN_RETRIES && !final_ack_seen) {
-			// fin发送次数未达上限且未收到最终ACK
-
-			// 等待握手时间，收集最终ACK
-			if (wait_for_packet(final_ack, from, HANDSHAKE_TIMEOUT_MS)) {
-				// 收到数据包，检查是否为最终ACK
-				if (!same_endpoint(from, client_)) {
-					continue;
-				}
+			Packet final_ack{};
+			sockaddr_in from{};
+			if (wait_for_packet(final_ack, from, FIN_ACK_WAIT_MS) && same_endpoint(from, client_)) {
 				if (final_ack.header.flags & FLAG_ACK) {
-					// 收到最终ACK，握手完成
 					final_ack_seen = true;
 					cout << "[DEBUG] Final ACK received, close handshake completed" << endl;
-				} else if (final_ack.header.flags & FLAG_FIN) {
-					// 收到重复FIN，重传FIN+ACK
+					break;
+				}
+				// 若在等待期间又收到重复 FIN，则立即再回一次 FIN+ACK（不额外延长等待）
+				if (final_ack.header.flags & FLAG_FIN) {
 					send_ack(true, fin_ack_seq);
 					cout << "[DEBUG] Re-sent FIN+ACK on duplicate FIN" << endl;
 				}
-			} else {
-				// 超时未收到ACK，重传FIN+ACK
-				++fin_ack_attempts;
-				cout << "[DEBUG] Retrying FIN+ACK (attempt " << fin_ack_attempts << "/" << MAX_FIN_RETRIES << ")"
-					 << endl;
-				send_ack(true, fin_ack_seq);
 			}
 		}
 
-		// 未收到最终ACK，失败
+		// 未收到最终ACK也不阻塞退出：sender 可能已经释放，继续重试只会拖住 receiver 退出
 		if (!final_ack_seen) {
-			cout << "[WARN] FIN handshake incomplete after retries" << endl;
+			cout << "[WARN] Final ACK not seen, receiver closing anyway" << endl;
 		}
 	}
 
@@ -375,7 +366,7 @@ namespace rtp {
 		while (true) {
 			Packet p{};
 			sockaddr_in from{};
-			// 等待数据包，5000ms没有收到新的数据包则认为是超时
+			// 等待数据包，5000ms没有收到新的数据包则认为是超时，收到的是坏包也会继续等待
 			if (!wait_for_packet(p, from, DATA_TIMEOUT_MS)) {
 				// 连续超时检测
 				consecutive_timeouts_++;

@@ -5,24 +5,12 @@
 
 namespace rtp {
 	using std::size_t;
-	using std::vector;
 
 	SendWindow::SendWindow() : total_segments_(0), base_seq_(1), next_seq_(1) {}
 
-	void SendWindow::initialize(const vector<uint8_t>& file_data) {
-		// 计算总段数，为每段分配空间
-		total_segments_ = static_cast<uint32_t>((file_data.size() + MAX_PAYLOAD - 1) / MAX_PAYLOAD);
-		segments_.assign(total_segments_, {});
-
-		// 将文件数据分段存储
-		for (uint32_t i = 0; i < total_segments_; ++i) {
-			size_t start = i * MAX_PAYLOAD;
-			size_t len = std::min<size_t>(MAX_PAYLOAD, file_data.size() - start);
-			segments_[i].data.insert(segments_[i].data.end(), file_data.begin() + start,
-									 file_data.begin() + start + len);
-		}
-
-		// 初始化基序号和下一个待发送序号
+	void SendWindow::initialize(uint64_t file_size_bytes) {
+		total_segments_ = static_cast<uint32_t>((file_size_bytes + MAX_PAYLOAD - 1) / MAX_PAYLOAD);
+		segments_.clear();
 		base_seq_ = 1;
 		next_seq_ = 1;
 	}
@@ -32,15 +20,39 @@ namespace rtp {
 			// 序号无效，忽略
 			return;
 		}
-		auto& seg = segments_[seq - 1];	 // 序号从1开始
-		if (!seg.acked) {
-			// 标记为已确认
-			seg.acked = true;
-			seg.last_sack_retx = 0;
+		auto it = segments_.find(seq);
+		if (it == segments_.end()) {
+			return;
 		}
+		auto& seg = it->second;
+		if (seg.acked) {
+			return;
+		}
+		seg.acked = true;
+		seg.last_sack_retx = 0;
+		seg.data.clear();
+		seg.data_loaded = false;
 	}
 
-	SendWindow::SegmentInfo& SendWindow::get_segment(uint32_t seq) { return segments_[seq - 1]; }
+	SendWindow::SegmentInfo& SendWindow::get_segment(uint32_t seq) {
+		auto it = segments_.find(seq);
+		if (it != segments_.end()) {
+			return it->second;
+		}
+		auto [ins_it, _] = segments_.emplace(seq, SegmentInfo{});
+		return ins_it->second;
+	}
+
+	void SendWindow::set_base_seq(uint32_t seq) {
+		base_seq_ = seq;
+		for (auto it = segments_.begin(); it != segments_.end();) {
+			if (it->first < base_seq_) {
+				it = segments_.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
 
 	bool SendWindow::all_acked() const {
 		// 当所有段都确认后，base_seq_ 会被 advance_base_seq() 推进到 total_segments_ + 1
@@ -56,9 +68,16 @@ namespace rtp {
 	}
 
 	void SendWindow::advance_base_seq() {
-		// 如果当前 base_seq_ 段已确认，左窗口推进到下一个未确认段
-		while (base_seq_ <= total_segments_ && segments_[base_seq_ - 1].acked) {
-			base_seq_++;
+		while (base_seq_ <= total_segments_) {
+			auto it = segments_.find(base_seq_);
+			if (it == segments_.end()) {
+				return;
+			}
+			if (!it->second.acked) {
+				return;
+			}
+			segments_.erase(it);
+			++base_seq_;
 		}
 	}
 

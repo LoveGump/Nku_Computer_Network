@@ -1,5 +1,5 @@
 *.exe
-build/
+
 lab2test/
 clumsy/
 *.pdf
@@ -8,3 +8,6 @@ AGENTS.md
 PROTOCOL_DESIGN.md
 *.log
 report
+*.wav
+report/
+build/

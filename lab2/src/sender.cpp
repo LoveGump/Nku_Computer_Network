@@ -11,7 +11,6 @@ namespace rtp {
 	using std::cerr;
 	using std::cout;
 	using std::endl;
-	using std::ifstream;
 	using std::size_t;
 	using std::string;
 	using std::vector;
@@ -30,7 +29,7 @@ namespace rtp {
 		// 单个数据段最大重传次数（超过则认为连接断开）
 		constexpr int MAX_RETRANSMITS = 15;
 		// 全局无响应超时（30秒）
-		constexpr int GLOBAL_TIMEOUT_MS = 30000;
+		constexpr int GLOBAL_TIMEOUT_MS = 300000;
 	}  // namespace
 
 	ReliableSender::ReliableSender(string dest_ip, uint16_t dest_port, string file_path, uint16_t window_size,
@@ -184,6 +183,14 @@ namespace rtp {
 
 		// 获取段信息
 		auto& seg = window_.get_segment(seq);
+		if (!seg.data_loaded) {
+			if (!load_segment_payload(seq, seg.data)) {
+				cerr << "[ERROR] Failed to read payload for seq=" << seq << endl;
+				send_rst();
+				return;
+			}
+			seg.data_loaded = true;
+		}
 		bool is_retransmit = seg.sent;	// 已发送过则为重传
 
 		// 检查重传次数，超过限制认为连接失败
@@ -234,17 +241,45 @@ namespace rtp {
 		}
 		auto& seg = window_.get_segment(seq);
 		if (!seg.acked) {
-			bytes_acked_ += seg.data.size();
+			bytes_acked_ += payload_len_for_seq(seq);
 		}
 	}
 
+	size_t ReliableSender::payload_len_for_seq(uint32_t seq) const {
+		if (seq == 0 || file_size_ == 0) {
+			return 0;
+		}
+		uint64_t offset = static_cast<uint64_t>(seq - 1) * static_cast<uint64_t>(MAX_PAYLOAD);
+		if (offset >= file_size_) {
+			return 0;
+		}
+		return static_cast<size_t>(std::min<uint64_t>(MAX_PAYLOAD, file_size_ - offset));
+	}
+
+	bool ReliableSender::load_segment_payload(uint32_t seq, vector<uint8_t>& out) {
+		size_t len = payload_len_for_seq(seq);
+		out.assign(len, 0);
+		if (len == 0) {
+			return true;
+		}
+		uint64_t offset = static_cast<uint64_t>(seq - 1) * static_cast<uint64_t>(MAX_PAYLOAD);
+
+		input_.clear();
+		input_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+		if (!input_) {
+			return false;
+		}
+		input_.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(len));
+		return input_.gcount() == static_cast<std::streamsize>(len);
+	}
+
 	void ReliableSender::report_progress(bool force) {
-		if (file_data_.empty()) {
+		if (file_size_ == 0) {
 			return;	 // 没有数据无需显示进度
 		}
 
 		uint64_t now = now_ms();
-		int percent = static_cast<int>((bytes_acked_ * 100) / std::max<size_t>(1, file_data_.size()));
+		int percent = static_cast<int>((bytes_acked_ * 100) / std::max<size_t>(1, static_cast<size_t>(file_size_)));
 		percent = std::min(100, std::max(0, percent));
 
 		if (!force) {
@@ -259,7 +294,7 @@ namespace rtp {
 		last_progress_print_ = now;
 		last_progress_percent_ = percent;
 		std::printf("\rProgress: %3d%% (%zu/%zu bytes)", percent, static_cast<size_t>(bytes_acked_),
-					static_cast<size_t>(file_data_.size()));
+					static_cast<size_t>(file_size_));
 		std::fflush(stdout);
 		if (force && percent >= 100) {
 			std::printf("\n");
@@ -295,21 +330,8 @@ namespace rtp {
 		// 发送方滑动窗口：推进窗口左边界
 		window_.set_base_seq(ack);
 
-		//  检测部分ACK并处理
-		// on_new_ack来更新拥塞控制窗口和拥塞控制状态
-		bool is_partial_ack = congestion_.on_new_ack(ack, window_.get_next_seq()); 
-
-		if (is_partial_ack) {
-			// 部分ACK：重传下一个未确认的段，不进入快速恢复
-			uint32_t next_unacked = ack;
-			if (next_unacked <= window_.total_segments()) {
-				auto& seg = window_.get_segment(next_unacked);
-				if (!seg.acked) {
-					cout << "[NewReno] Retransmitting next unacked segment: " << next_unacked << endl;
-					transmit_segment(next_unacked);
-				}
-			}
-		}
+		// Reno：收到新 ACK 后更新拥塞控制窗口与状态
+		congestion_.on_new_ack();
 	}
 
 
@@ -408,7 +430,7 @@ namespace rtp {
 		// 检测是否触发快速重传
 		if (congestion_.should_fast_retransmit()) {
 			// 触发快速重传
-			congestion_.on_fast_retransmit(window_.get_next_seq());
+			congestion_.on_fast_retransmit();
 			fast_retransmit();
 		}
 	}
@@ -507,13 +529,21 @@ namespace rtp {
 
 	/**
 	 * 检查并处理超时的数据段
-	 * 遍历窗口内所有已发送但未确认的段
+	 * 遍历窗口内所有已发送但未确认的段（仅扫描在途段）
 	 * 如果超过DATA_TIMEOUT_MS，则触发超时重传和拥塞控制
 	 */
 	void ReliableSender::handle_timeouts() {
 		uint64_t now = now_ms();  // 获取当前时间
-		// 遍历窗口内所有已发送但未确认的段
-		for (uint32_t i = window_.get_base_seq(); i <= window_.total_segments(); ++i) {
+		uint32_t base = window_.get_base_seq();
+		uint32_t total = window_.total_segments();
+		if (base == 0 || base > total) {
+			return;
+		}
+		uint32_t next_seq = window_.get_next_seq();
+		uint32_t scan_end_exclusive = std::min(next_seq, total + 1);
+
+		// 仅扫描在途段：[base, next_seq)
+		for (uint32_t i = base; i < scan_end_exclusive; ++i) {
 			auto& seg = window_.get_segment(i);
 			// 计时器：动态RTO，检测ack是否已经超时
 			if (!seg.acked && seg.sent && now - seg.last_send > static_cast<uint64_t>(rto_)) {
@@ -630,6 +660,7 @@ namespace rtp {
 		final_ack.len = 0;
 		final_ack.sack_mask = 0;
 		send_raw(final_ack, {});
+
 		// 标记断开连接完成
 		fin_complete_ = true;
 		cout << "[DEBUG] Received FIN+ACK, sent final ACK, connection closed" << endl;
@@ -701,21 +732,26 @@ namespace rtp {
 			return 1;
 		}
 
-		// 读取输入文件
-		ifstream in(file_path_, std::ios::binary);
-		if (!in) {
+		input_.open(file_path_, std::ios::binary);
+		if (!input_) {
 			cerr << "Cannot open input file" << endl;
 			return 1;
 		}
-		// 按字节读取整个文件到内存
-		file_data_ = vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		input_.seekg(0, std::ios::end);
+		std::streampos end_pos = input_.tellg();
+		if (end_pos < 0) {
+			cerr << "Failed to determine input file size" << endl;
+			return 1;
+		}
+		file_size_ = static_cast<uint64_t>(end_pos);
+		input_.seekg(0, std::ios::beg);
+
 		bytes_acked_ = 0;				  // 已确认字节数清零
 		last_progress_percent_ = -1;	  // 进度百分比初始化
 		last_progress_print_ = now_ms();  // 进度打印时间初始化
 
-		// 初始化发送窗口，将文件数据分段
-		cout << "[DEBUG] File size: " << file_data_.size() << " bytes" << endl;
-		window_.initialize(file_data_);
+		cout << "[DEBUG] File size: " << file_size_ << " bytes" << endl;
+		window_.initialize(file_size_);
 		cout << "[DEBUG] Total segments: " << window_.total_segments() << endl;
 		// 确保初始的时候对端窗口非零
 		peer_wnd_ = peer_wnd_ ? peer_wnd_ : window_size_;  
@@ -778,7 +814,7 @@ namespace rtp {
 		report_progress(true);
 
 		// 打印传输统计信息
-		stats_.print_sender_stats(file_data_.size(), window_.total_segments(), congestion_.get_cwnd(),
+		stats_.print_sender_stats(static_cast<size_t>(file_size_), window_.total_segments(), congestion_.get_cwnd(),
 								  congestion_.get_ssthresh());
 
 		if (!fin_complete_) {

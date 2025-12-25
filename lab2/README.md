@@ -1,72 +1,122 @@
-# 基于 UDP 的可靠传输协议
+# 基于 UDP 的可靠传输协议（实验项目）
 
-本项目在用户态基于 UDP 实现简化版的 TCP 式可靠传输：支持连接建立/关闭、校验和检错、选择确认的流水线重传、固定大小的流量控制窗口，以及 Reno 拥塞控制。
+本项目在用户态基于 UDP 实现“类 TCP”的可靠单向文件传输：数据从 sender 流向 receiver，但通过 ACK/SACK、重传、窗口与 Reno 拥塞控制等机制保证最终文件字节一致。
 
 ## 目录结构
-- `src/rtp.h` / `src/rtp.cpp`：报文格式、校验和、序列化解析、跨平台 socket 辅助。
-- `src/sender.h` / `src/sender.cpp`：`ReliableSender`，完成三次握手、流水线发送、SACK 处理、Reno 拥塞控制、FIN 结束和吞吐统计。
-- `src/receiver.h` / `src/receiver.cpp`：`ReliableReceiver`，缓存乱序数据、通告窗口与 SACK、FIN 结束和吞吐统计。
-- `src/sender_main.cpp`、`src/receiver_main.cpp`：命令行入口。
-- `CMakeLists.txt`：CMake 构建脚本。
 
-## 协议设计
-- **报文字段**（网络字节序，紧凑对齐）：
-  - `seq`：32 位分段序号（每个负载块一个）。
-  - `ack`：32 位累计确认，表示期望的下一个有序序号。
-  - `wnd`：16 位接收窗口大小（以段为单位，双方固定相同大小）。
-  - `len`：16 位负载长度（字节）。
-  - `flags`：16 位标志位，`SYN|ACK|FIN|DATA`。
-  - `sack_mask`：32 位 SACK 位图，反馈 `ack` 之后最多 32 个段的选择性确认（位 i 确认 `ack+1+i`）。
-  - `checksum`：16 位 1’s 补码校验和，覆盖首部+负载，计算时该字段置 0。
-- **连接管理**：
-  - 建立：`SYN` -> `SYN|ACK` -> `ACK`，数据序号从 1 开始。
-  - 关闭：发送端发 `FIN`，接收端回 `FIN|ACK`，发送端回最终 `ACK`。
-- **可靠性与重传**：
-  - 校验和错误直接丢弃。
-  - 接收端在窗口 `[expected, expected+wnd)` 内缓存乱序段，连续数据写入文件并推进 `expected`。
-  - SACK：累计 ACK + 位图，发送端据此提前标记已达段。
-  - 重传：按段超时重传并触发拥塞退避；三重冗余 ACK 触发快速重传。
-- **流量控制**：固定大小窗口，发送端在任意时刻的未确认段数受 `min(对端通告窗, 本地窗, floor(cwnd))` 限制。
-- **拥塞控制（Reno）**：
-  - 变量：拥塞窗口 `cwnd`（段），慢启动阈值 `ssthresh`。
-  - 慢启动：`cwnd < ssthresh` 时每个 ACK 线性加 1。
-  - 拥塞避免：`cwnd >= ssthresh` 时每个 ACK 加 `1/cwnd`。
-  - 超时：`ssthresh = cwnd/2`，`cwnd = 1`，退出快速恢复。
-  - 三重冗余 ACK：`ssthresh = cwnd/2`，`cwnd = ssthresh + 3`，立即重传基段；后续冗余 ACK 线性膨胀 `cwnd`；首个新 ACK 退出快速恢复并设 `cwnd = ssthresh`。
+```text
+.
+├─ CMakeLists.txt
+├─ README.md
+├─ include/
+│  ├─ rtp.h
+│  ├─ sender.h
+│  ├─ receiver.h
+│  ├─ send_window.h
+│  ├─ receive_buffer.h
+│  ├─ congestion_control.h
+│  ├─ transfer_stats.h
+│  └─ utils/
+│     └─ logger.h
+├─ src/
+│  ├─ sender_main.cpp
+│  ├─ sender.cpp
+│  ├─ receiver_main.cpp
+│  ├─ receiver.cpp
+│  ├─ rtp.cpp
+│  ├─ send_window.cpp
+│  ├─ receive_buffer.cpp
+│  ├─ congestion_control.cpp
+│  ├─ transfer_stats.cpp
+│  └─ utils/
+│     └─ logger.cpp
+├─ report/                 (实验报告与绘图脚本)
+├─ logs/                   (运行时自动创建并写入日志)
+└─ build/                  (CMake 构建目录，构建后生成)
+```
 
-## 实现说明
-- 发送端：读取文件按 `MAX_PAYLOAD` 分段，跟踪发送/确认/时间戳；基于滑动窗口 + Reno 控制发包，处理 SACK，超时或三重 ACK 重传；FIN 结束后输出耗时与平均吞吐。
-- 接收端：等待 SYN 建链，锁定对端；窗口内缓存乱序段，连续段落地并前移 `expected`，每个数据包回 ACK+SACK 与窗口；收到 FIN 回 `FIN|ACK` 并打印吞吐。
-- 校验和：16 位 1’s 补码，完整报文计算结果应为 0。
-- 跨平台：POSIX 使用 BSD sockets，Windows 使用 Winsock（`init_socket_lib` 内调用 `WSAStartup`）。
+## 项目框架（模块划分）
 
-## 构建
-推荐 CMake（C++17）：
+整体结构是“两端程序 + 一组可复用协议组件”：
+
+- `src/sender_main.cpp`：sender 入口，解析命令行参数并启动发送端
+- `src/receiver_main.cpp`：receiver 入口，解析命令行参数并启动接收端
+- `include/rtp.h` + `src/rtp.cpp`：协议基础设施
+  - 报文头 `PacketHeader`/`Packet`、序列化/反序列化（网络字节序）
+  - 16-bit 反码校验和
+  - socket 初始化与工具函数（Windows 下自动 `WSAStartup`）
+- `include/sender.h` + `src/sender.cpp`：发送端核心 `ReliableSender`
+  - 三次握手、数据流水线发送、ACK/SACK 处理、超时与快速重传、四次挥手关闭
+  - 零窗口探测（Persist Timer）
+  - 传输统计与进度输出
+- `include/receiver.h` + `src/receiver.cpp`：接收端核心 `ReliableReceiver`
+  - 被动握手、窗口内乱序缓存、按序落盘、ACK+SACK 回包、关闭处理
+  - 统计乱序/重复包数量与吞吐
+- `include/send_window.h` + `src/send_window.cpp`：发送窗口（在途段管理、已确认推进、窗口容量计算）
+- `include/receive_buffer.h` + `src/receive_buffer.cpp`：接收端乱序缓存与 SACK 位图生成
+- `include/congestion_control.h` + `src/congestion_control.cpp`：Reno 拥塞控制状态机（`cwnd/ssthresh/dupAck`）
+- `include/transfer_stats.h` + `src/transfer_stats.cpp`：耗时、吞吐、重传等统计输出
+- `include/utils/logger.h` + `src/utils/logger.cpp`：日志重定向到 `logs/*.log`（自动创建目录）
+
+## 构建方式
+
+本项目使用 CMake（C++17），默认会生成两个可执行文件：`sender` 与 `receiver`（见 `CMakeLists.txt`）。
+
 ```bash
-cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SH="CMAKE_SH-NOTFOUND"
+cmake -S . -B build
 cmake --build build --config Release
 ```
-生成：`build/Release/sender(.exe)`、`build/Release/receiver(.exe)`（单配置生成器则在 `build/` 下）。
 
-直接编译（无需 CMake）：
-- POSIX：
-  ```bash
-  g++ -std=c++17 -O2 -o sender src/sender_main.cpp src/sender.cpp src/rtp.cpp
-  g++ -std=c++17 -O2 -o receiver src/receiver_main.cpp src/receiver.cpp src/rtp.cpp
-  ```
-- Windows（MinGW/MSVC）：
-  ```bash
-  g++ -std=c++17 -O2 -o sender.exe src/sender_main.cpp src/sender.cpp src/rtp.cpp -lws2_32
-  g++ -std=c++17 -O2 -o receiver.exe src/receiver_main.cpp src/receiver.cpp src/rtp.cpp -lws2_32
-  ```
+产物位置取决于生成器：
+- 多配置生成器：`build/Release/sender(.exe)`、`build/Release/receiver(.exe)`
+- 单配置生成器：`build/sender(.exe)`、`build/receiver(.exe)`
 
-## 运行与测试
-1. 启动接收端：`./receiver <listen_port> <output_file> <window_size>`
-2. 启动发送端：`./sender <receiver_ip> <receiver_port> <input_file> <window_size>`
-3. 结束时双方输出耗时和平均吞吐率。调整 `window_size` 可观察流控影响；在链路上引入丢包/延迟（如 `tc netem`）可观察不同丢包率下的性能变化。
+## 运行方式（最重要）
 
-### 预期表现
-- 窗口更大时吞吐提升，直到丢包触发 Reno 回退。
-- 较高丢包率下，SACK + 快速重传比仅依赖超时恢复更快。
-- 数据单向传输，控制报文双向交换。
+先启动接收端，再启动发送端。
 
+### 1）启动接收端
+
+```bash
+receiver(.exe) <listen_port> <output_file> [window_size]
+```
+
+- `listen_port`：监听端口，例如 `8000`
+- `output_file`：接收端输出文件路径
+- `window_size`：可选，默认 `32`（建议不超过 32，与 SACK 位图宽度一致）
+
+示例：
+```bash
+./receiver 8000 out.bin 32
+```
+
+### 2）启动发送端
+
+```bash
+sender(.exe) <receiver_ip> <receiver_port> <input_file> <window_size> [local_port]
+```
+
+- `receiver_ip`/`receiver_port`：接收端 IP 与端口
+- `input_file`：发送端读取的输入文件路径
+- `window_size`：发送窗口大小（建议与接收端一致，且不超过 32）
+- `local_port`：可选，绑定本地端口（默认 `9000`）
+
+示例（本机回环）：
+```bash
+./sender 127.0.0.1 8000 .\2.jpg 32
+```
+
+运行结束后：
+- receiver 侧会生成 `output_file`
+- sender/receiver 默认把日志写到 `logs/sender.log`、`logs/receiver.log`
+
+## 在不可靠网络下运行（可选）
+
+在 Windows 上可用 clumsy 对 UDP 注入丢包/延迟；做对比实验时建议：
+- 固定测试文件（如 `2.jpg`）
+- 每个配置重复多次取均值
+- 分别只改变一个变量（窗口大小 / 丢包率）
+
+## 常见问题
+
+- 传输很慢：通常与丢包/延迟、窗口设置、以及拥塞控制回退有关；建议先在无丢包条件下验证正确性，再逐步增加丢包率进行对比。
