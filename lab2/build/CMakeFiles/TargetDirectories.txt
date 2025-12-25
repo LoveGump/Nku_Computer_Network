@@ -1,0 +1,4 @@
+F:/code/Computer_Network/lab2/build/CMakeFiles/sender.dir
+F:/code/Computer_Network/lab2/build/CMakeFiles/receiver.dir
+F:/code/Computer_Network/lab2/build/CMakeFiles/edit_cache.dir
+F:/code/Computer_Network/lab2/build/CMakeFiles/rebuild_cache.dir

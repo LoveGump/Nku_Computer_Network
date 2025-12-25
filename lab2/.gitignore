@@ -1,4 +1,3 @@
-*.exe
 
 lab2test/
 clumsy/
@@ -10,4 +9,3 @@ PROTOCOL_DESIGN.md
 report
 *.wav
 report/
-build/
