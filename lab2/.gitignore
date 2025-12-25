@@ -5,7 +5,7 @@ lab2test/
 *.bat
 AGENTS.md
 PROTOCOL_DESIGN.md
-*.log
+
 report
 *.wav
 report/
