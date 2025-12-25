@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
-#include <cmath>
 
 namespace rtp {
 	using std::cerr;
@@ -180,7 +179,6 @@ namespace rtp {
 	 * 如果是重传，会记录统计信息
 	 */
 	void ReliableSender::transmit_segment(uint32_t seq) {
-
 		// 获取段信息
 		auto& seg = window_.get_segment(seq);
 		if (!seg.data_loaded) {
@@ -195,8 +193,8 @@ namespace rtp {
 
 		// 检查重传次数，超过限制认为连接失败
 		if (is_retransmit) {
-			seg.retrans_count++; 			// 增加重传计数
-			seg.is_retransmitted = true;  	// 标记为重传（Karn算法计算时间需要用到）
+			seg.retrans_count++;		  // 增加重传计数
+			seg.is_retransmitted = true;  // 标记为重传（Karn算法计算时间需要用到）
 			if (seg.retrans_count > MAX_RETRANSMITS) {
 				// 超过最大重传次数15，连接断开
 				cerr << "[ERROR] Segment " << seq << " exceeded max retransmits (" << MAX_RETRANSMITS
@@ -225,7 +223,7 @@ namespace rtp {
 
 		// 发送数据包
 		send_raw(hdr, seg.data);
-		seg.sent = true;			// 标记为已发送
+		seg.sent = true;  // 标记为已发送
 		seg.last_send = now_ms();
 
 		// 记录重传统计
@@ -307,7 +305,6 @@ namespace rtp {
 	 * 标记所有 < ack 的段为已确认，并调用拥塞控制
 	 */
 	void ReliableSender::handle_new_ack(uint32_t ack) {
-
 		// 测量RTT（Karn算法：只测量未重传的段来更新RTT）
 		for (uint32_t i = window_.get_base_seq(); i < ack && i <= window_.total_segments(); ++i) {
 			// 找到第一个未重传且已发送的段
@@ -317,13 +314,13 @@ namespace rtp {
 				uint64_t rtt_sample = now_ms() - seg.send_timestamp;
 				update_rto(rtt_sample);	 // 更新RTO
 				// 只需要使用第一个符合条件的段进行RTT测量即可
-				break;	
+				break;
 			}
 		}
 
 		// 标记所有被确认的段
 		for (uint32_t s = window_.get_base_seq(); s < ack && s <= window_.total_segments(); ++s) {
-			add_acked_bytes(s);	// 用于显示
+			add_acked_bytes(s);		// 用于显示
 			window_.mark_acked(s);	// 更新窗口标记
 		}
 
@@ -333,7 +330,6 @@ namespace rtp {
 		// Reno：收到新 ACK 后更新拥塞控制窗口与状态
 		congestion_.on_new_ack();
 	}
-
 
 	// ========================================
 	// 窗口探测
@@ -380,8 +376,6 @@ namespace rtp {
 		}
 	}
 
-
-
 	/**
 	 * 更新RTO（Jacobson/Karels算法）
 	 * rtt_sample: RTT样本（毫秒）
@@ -393,7 +387,7 @@ namespace rtp {
 	void ReliableSender::update_rto(uint64_t rtt_sample) {
 		constexpr double ALPHA = 0.125;	 // 1/8
 		constexpr double BETA = 0.25;	 // 1/4
-		constexpr int MIN_RTO = 20;	 // 最小RTO 20ms
+		constexpr int MIN_RTO = 20;		 // 最小RTO 20ms
 		constexpr int MAX_RTO = 60000;	 // 最大RTO 60s
 
 		if (!rtt_initialized_) {
@@ -480,7 +474,6 @@ namespace rtp {
 	}
 
 	void ReliableSender::handle_ack(const Packet& pkt) {
-
 		// 更新最后收到ACK的时间（用于全局超时检测）
 		last_ack_time_ = now_ms();
 		// 获取接收方窗口大小，拥塞控制时会更新min(对端窗口, 位宽)
@@ -490,7 +483,7 @@ namespace rtp {
 		if (new_peer_wnd == 0 && !zero_window_) {
 			// 进入零窗口状态
 			zero_window_ = true;
-			persist_backoff_ = 0;	// 重置退避计数
+			persist_backoff_ = 0;			   // 重置退避计数
 			persist_timer_ = now_ms() + 5000;  // 首次探测：5秒
 			cout << "[windows]: zero window, start persist timer" << endl;
 		} else if (new_peer_wnd > 0 && zero_window_) {
@@ -579,7 +572,7 @@ namespace rtp {
 	void ReliableSender::try_send_data() {
 		// 零窗口时由窗口探测机制处理，这里直接退出
 		if (peer_wnd_ == 0) {
-			return;	
+			return;
 		}
 
 		// 计算实际窗口大小 = min(本地窗口, 对端窗口, floor(cwnd), SACK位宽)
@@ -589,7 +582,7 @@ namespace rtp {
 		while (window_.get_next_seq() <= window_.total_segments() &&
 			   window_.get_next_seq() < window_.get_base_seq() + window_cap) {
 			// 获取下一个数据段并发送
-			auto& seg = window_.get_segment(window_.get_next_seq()); // 获得数据段信息
+			auto& seg = window_.get_segment(window_.get_next_seq());  // 获得数据段信息
 			if (!seg.sent) {
 				// 发送数据段，发送窗口更新下一个序号
 				transmit_segment(window_.get_next_seq());
@@ -690,7 +683,7 @@ namespace rtp {
 	}
 
 	int ReliableSender::run() {
-		WSADATA wsa;  // WSA 
+		WSADATA wsa;  // WSA
 		// 2.2 版本
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
 			cerr << "WSAStartup failed" << endl;
@@ -754,9 +747,9 @@ namespace rtp {
 		window_.initialize(file_size_);
 		cout << "[DEBUG] Total segments: " << window_.total_segments() << endl;
 		// 确保初始的时候对端窗口非零
-		peer_wnd_ = peer_wnd_ ? peer_wnd_ : window_size_;  
+		peer_wnd_ = peer_wnd_ ? peer_wnd_ : window_size_;
 		// 初始化拥塞控制
-		congestion_ = CongestionControl(std::max<double>(2.0, peer_wnd_));// 初始化拥塞窗口为对端窗口和2的最大值
+		congestion_ = CongestionControl(std::max<double>(2.0, peer_wnd_));	// 初始化拥塞窗口为对端窗口和2的最大值
 
 		cout << "[DEBUG] Starting transmission - Window: " << window_size_
 			 << ", Initial cwnd: " << congestion_.get_cwnd() << ", ssthresh: " << congestion_.get_ssthresh() << endl;

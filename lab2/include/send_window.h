@@ -69,10 +69,10 @@ namespace rtp {
 		size_t calculate_window_size(uint16_t local_window, uint16_t peer_window, double cwnd, size_t sack_bits) const;
 
 	   private:
-		unordered_map<uint32_t, SegmentInfo> segments_;	// 在途/关注段（按需创建，避免全量切割）
-		uint32_t total_segments_;		// 总段数
-		uint32_t base_seq_;				// 窗口左边界（最小未确认序号）
-		uint32_t next_seq_;				// 下一个待发送序号
+		unordered_map<uint32_t, SegmentInfo> segments_;	 // 在途/关注段（按需创建，避免全量切割）
+		uint32_t total_segments_;						 // 总段数
+		uint32_t base_seq_;								 // 窗口左边界（最小未确认序号）
+		uint32_t next_seq_;								 // 下一个待发送序号
 	};
 
 }  // namespace rtp

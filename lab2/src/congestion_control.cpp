@@ -47,23 +47,22 @@ namespace rtp {
 
 	void CongestionControl::on_fast_retransmit() {
 		// 快重传
-		cout << "[LOSS] Detected 3 duplicate ACKs, triggering fast retransmit (cwnd: "
-			 << cwnd_ << " -> " << (cwnd_ / 2.0 + 3.0) << ")" << endl;
+		cout << "[LOSS] Detected 3 duplicate ACKs, triggering fast retransmit (cwnd: " << cwnd_ << " -> "
+			 << (cwnd_ / 2.0 + 3.0) << ")" << endl;
 
 		ssthresh_ = std::max(4.0, cwnd_ / 2.0);	 // 最小为4
-		cwnd_ = ssthresh_ + 3.0;					// 增加3个MSS以应对网络中离开的包
+		cwnd_ = ssthresh_ + 3.0;				 // 增加3个MSS以应对网络中离开的包
 		in_fast_recovery_ = true;
 	}
 
-	
 	void CongestionControl::on_timeout() {
 		cout << "[TIMEOUT] Congestion control timeout (cwnd: " << cwnd_ << " -> 1.0, ssthresh: " << ssthresh_ << " -> "
 			 << (cwnd_ / 2.0) << ")" << endl;
 		// 慢启动
-		ssthresh_ = std::max(4.0, cwnd_ / 2.0); // 最小为4
+		ssthresh_ = std::max(4.0, cwnd_ / 2.0);	 // 最小为4
 		cwnd_ = 1.0;
-		// 重置拥塞控制状态  		
-		dup_ack_count_ = 0;	
+		// 重置拥塞控制状态
+		dup_ack_count_ = 0;
 		in_fast_recovery_ = false;
 	}
 }  // namespace rtp

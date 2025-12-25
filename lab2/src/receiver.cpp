@@ -102,7 +102,7 @@ namespace rtp {
 		PacketHeader ack{};
 		ack.seq = isn_ + 1;	 // 本端下一个序号
 		// ack 是否为 FIN+ACK，否则就是下一个序号
-		ack.ack = fin ? fin_ack : buffer_.get_expected_seq(); // 期望接收的下一个序列号
+		ack.ack = fin ? fin_ack : buffer_.get_expected_seq();  // 期望接收的下一个序列号
 		// 设置标志位、窗口大小、SACK掩码
 		ack.flags = FLAG_ACK | (fin ? FLAG_FIN : 0);
 		ack.wnd = window_size_;								  // 通告接收窗口大小
@@ -274,9 +274,9 @@ namespace rtp {
 			out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
 			bytes_written_ += data.size();
 		}
-		
+
 		// 发送ACK+SACK
-		send_ack();	 
+		send_ack();
 	}
 
 	/**
